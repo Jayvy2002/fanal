@@ -112,6 +112,15 @@ function prune(): void {
   for (let i = 0; i < drop; i++) store.bars.delete(times[i]);
 }
 
+/** Barre 1s [t, t+1000) complète seulement si now >= t+1000. */
+export function isBarComplete(t: number, nowMs: number): boolean {
+  return t + SEC <= nowMs;
+}
+
+export function completedKlines(klines: Kline[], nowMs: number): Kline[] {
+  return klines.filter((k) => isBarComplete(k.t, nowMs));
+}
+
 function densify(from: number, to: number): Bar[] {
   const out: Bar[] = [];
   let prev: Bar | null = null;

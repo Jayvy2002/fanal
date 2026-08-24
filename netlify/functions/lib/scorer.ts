@@ -58,6 +58,8 @@ export type ModelMeta = {
   importance?: { name: string; gain: number }[];
   swapped_live?: boolean | null;
   swap_reason?: string;
+  train_archive?: string;
+  live_venue?: string;
   coinbase_train?: {
     n_days?: number;
     tau?: number;

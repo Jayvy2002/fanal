@@ -172,8 +172,9 @@ export function PaperTable({
         bp, faiseur {nfPrice.format(maker)} bp. Aller-retour {mode === "taker" ? "preneur" : "faiseur"} ={" "}
         {nfPrice.format(rt)} bp vs |move| 5s ~1 bp — le paper preneur devrait perdre. Aucun ordre réel, aucune
         clé, aucun retrait. Carnet persisté ({p.store === "blobs" ? "Netlify Blobs" : "fichier local"}) : un cold
-        start ne remet plus le livre à zéro. Short = notionnel virtuel. Un jour vert ici voudrait dire qu’on peut
-        parler live — pas avant.
+        start ne remet plus le livre à zéro. Short = notionnel virtuel. Hit* = direction du fill, sans frais ;
+        le PnL $ compte les deux jambes. Cron 1 min (paper-tick) avance le flatten si l’onglet n’est pas au
+        premier plan. Un jour vert ici voudrait dire qu’on peut parler live — pas avant.
       </div>
 
       <div className="mt-3 overflow-x-auto">
@@ -185,7 +186,7 @@ export function PaperTable({
               <th className="pb-2 font-medium">Entrée → sortie</th>
               <th className="pb-2 font-medium">Statut</th>
               <th className="pb-2 font-medium">Rôle</th>
-              <th className="pb-2 text-center font-medium">Hit</th>
+              <th className="pb-2 text-center font-medium">Hit*</th>
               <th className="pb-2 text-right font-medium">PnL $</th>
               <th className="pb-2 text-right font-medium">bps nets</th>
             </tr>

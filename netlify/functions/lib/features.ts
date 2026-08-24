@@ -67,7 +67,7 @@ function signedOf(k: Kline): number {
   return 2 * k.tb - k.v;
 }
 
-/** Leak-free feature map for the latest completed 1s bar. Matches train/train_fanal.py. */
+/** Leak-free feature map for the latest *completed* 1s bar (caller must drop the current second). Matches train/train_fanal.py. */
 export function computeFeatureMap(klines: Kline[]): Record<string, number> {
   const n = klines.length;
   if (n < 61) throw new Error("not_enough_klines");

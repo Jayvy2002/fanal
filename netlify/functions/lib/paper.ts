@@ -20,6 +20,8 @@ export type MarketBar = { t: number; h: number; l: number };
 
 export type MarketPx = {
   now: number;
+  /** Horloge Coinbase (dernier ticker). Les barres 1s sont datées ainsi. */
+  exch_now?: number;
   mid: number;
   bid: number;
   ask: number;
@@ -68,28 +70,30 @@ function sellPx(m: MarketPx): number {
   return m.bid > 0 ? m.bid : m.mid;
 }
 
-/** Achat faiseur : fill si le marché trade sous (ou au) bid. Vente : au-dessus de l’ask. */
-function makerFill(side: "buy" | "sell", limit: number, m: MarketPx, sinceTs?: number): boolean {
+function exchOf(m: MarketPx, wallTs: number): number {
+  if (m.exch_now && m.now) return wallTs - (m.now - m.exch_now);
+  return wallTs;
+}
+
+/** Achat faiseur : fill seulement si le marché trade *sous* la limite (trade-through).
+ *  Touch du bid/ask ou last/mid ne remplissent pas — sinon chaque bounce fill le paper.
+ *  Pas de lookahead : on ignore la barre 1s qui a commencé avant l’ordre (horloge exchange). */
+export function makerFill(side: "buy" | "sell", limit: number, m: MarketPx, sinceTs?: number): boolean {
   if (!(limit > 0)) return false;
-  let low = m.low > 0 ? m.low : 0;
-  let high = m.high > 0 ? m.high : 0;
-  if (m.bars?.length && sinceTs) {
-    let wLow = Infinity;
-    let wHigh = -Infinity;
+  let low = Infinity;
+  let high = -Infinity;
+  const placed = sinceTs != null ? exchOf(m, sinceTs) : 0;
+  if (m.bars?.length) {
     for (const b of m.bars) {
-      if (b.t + 1000 <= sinceTs) continue;
-      if (b.l > 0) wLow = Math.min(wLow, b.l);
-      if (b.h > 0) wHigh = Math.max(wHigh, b.h);
+      if (b.t < placed) continue;
+      if (b.l > 0) low = Math.min(low, b.l);
+      if (b.h > 0) high = Math.max(high, b.h);
     }
-    if (Number.isFinite(wLow)) low = wLow;
-    if (Number.isFinite(wHigh)) high = wHigh;
   }
   if (side === "buy") {
-    const traded = low > 0 ? low : Math.min(m.last || Infinity, m.mid || Infinity);
-    return Number.isFinite(traded) && traded <= limit + 1e-9;
+    return Number.isFinite(low) && low < limit - 1e-9;
   }
-  const traded = high > 0 ? high : Math.max(m.last || 0, m.mid || 0);
-  return traded >= limit - 1e-9;
+  return Number.isFinite(high) && high > limit + 1e-9;
 }
 
 function applyFee(led: Ledger, usd: number, role: FillRole): void {
@@ -260,6 +264,12 @@ function placeMakerEntry(led: Ledger, signal: Signal, m: MarketPx): void {
 }
 
 function fillMakerEntry(led: Ledger, order: PaperOrder, m: MarketPx): void {
+  const horizonEnd = order.placed_ts + HORIZON_MS;
+  /* Flatten à l’horizon du signal (placement), pas +5s après le fill. */
+  if (m.now >= horizonEnd) {
+    cancelEntry(led, order, m.now);
+    return;
+  }
   const px = order.limit_px;
   const qty = order.qty;
   const notional = px * qty;
@@ -284,7 +294,7 @@ function fillMakerEntry(led: Ledger, order: PaperOrder, m: MarketPx): void {
     entry_ts: m.now,
     entry_fee_usd: fee,
     entry_role: "maker",
-    flatten_ts: m.now + HORIZON_MS,
+    flatten_ts: horizonEnd,
     expected_move_bps: order.expected_move_bps,
   };
   const exitLimit = order.side === "up" ? buyPx(m) : sellPx(m);
@@ -295,7 +305,7 @@ function fillMakerEntry(led: Ledger, order: PaperOrder, m: MarketPx): void {
     limit_px: exitLimit,
     qty,
     placed_ts: m.now,
-    expire_ts: m.now + HORIZON_MS,
+    expire_ts: horizonEnd,
     expected_move_bps: order.expected_move_bps,
   };
   led.updated_ts = m.now;
@@ -348,25 +358,42 @@ function cancelEntry(led: Ledger, order: PaperOrder, now: number): void {
 function canEnter(led: Ledger, signal: Signal, m: MarketPx): boolean {
   if (led.open || led.pending) return false;
   if (!signal.gated || signal.side === "flat") return false;
-  if (Math.abs(signal.expected_move_bps) < led.min_move_bps) return false;
-  if (m.now - led.last_entry_attempt_ts < HORIZON_MS - 200) return false;
+  /* Paper = tête 5s uniquement. Un feu 15s ne doit pas ouvrir une position. */
+  if ((signal.horizon_s ?? 5) !== HORIZON_MS / 1000) return false;
+  const minMove = signal.min_move_bps ?? led.min_move_bps;
+  if (!(Math.abs(signal.expected_move_bps) >= minMove - 1e-12)) return false;
+  if (led.last_entry_attempt_ts > 0 && m.now - led.last_entry_attempt_ts < HORIZON_MS - 200) {
+    return false;
+  }
   if (!(m.mid > 0) || !(buyPx(m) > 0) || !(sellPx(m) > 0)) return false;
   return true;
+}
+
+function enforceOnePosition(led: Ledger): void {
+  if (led.open && led.pending?.kind === "entry") led.pending = null;
 }
 
 function step(led: Ledger, m: MarketPx, signal: Signal): void {
   if (!(m.now > 0) || !(m.mid > 0)) return;
   led.mark_px = m.mid;
+  led.min_move_bps = PAPER_MIN_MOVE_BPS;
+  enforceOnePosition(led);
 
+  let freed = false;
   if (led.pending?.kind === "exit" && led.open) {
     const buy = led.open.side === "down";
     if (makerFill(buy ? "buy" : "sell", led.pending.limit_px, m, led.pending.placed_ts)) {
       fillMakerExit(led, led.open, led.pending, m);
+      freed = true;
     } else if (m.now >= led.pending.expire_ts) {
       flattenTaker(led, led.open, m);
+      freed = true;
     }
   } else if (led.open && !led.pending) {
-    if (m.now >= led.open.flatten_ts) flattenTaker(led, led.open, m);
+    if (m.now >= led.open.flatten_ts) {
+      flattenTaker(led, led.open, m);
+      freed = true;
+    }
   }
 
   if (led.pending?.kind === "entry" && !led.open) {
@@ -375,13 +402,16 @@ function step(led: Ledger, m: MarketPx, signal: Signal): void {
       fillMakerEntry(led, led.pending, m);
     } else if (m.now >= led.pending.expire_ts) {
       cancelEntry(led, led.pending, m.now);
+      freed = true;
     }
   }
 
-  if (canEnter(led, signal, m)) {
+  /* Pas de ré-entrée sur le même snapshot que flatten/cancel : une position, un prix. */
+  if (!freed && canEnter(led, signal, m)) {
     if (led.mode === "maker") placeMakerEntry(led, signal, m);
     else enterTaker(led, signal, m);
   }
+  enforceOnePosition(led);
 }
 
 function tradeToRow(t: PaperTrade): PaperRow {
@@ -446,15 +476,32 @@ function markPx(led: Ledger, m: MarketPx): number {
   return 0;
 }
 
-function unrealizedUsd(led: Ledger, mid: number): number {
-  if (!led.open || !(mid > 0)) return 0;
+function exitMarkPx(pos: PaperPosition, m: MarketPx): number {
+  return pos.side === "up" ? sellPx(m) : buyPx(m);
+}
+
+function exitFeeBps(led: Ledger): number {
+  if (led.mode === "maker" && led.pending?.kind === "exit") return MAKER_FEE_BPS;
+  return TAKER_FEE_BPS;
+}
+
+function unrealizedUsd(led: Ledger, m: MarketPx): number {
+  if (!led.open) return 0;
   const pos = led.open;
-  return pos.side === "up" ? (mid - pos.entry_px) * pos.qty : (pos.entry_px - mid) * pos.qty;
+  const px = exitMarkPx(pos, m);
+  if (!(px > 0)) return 0;
+  const gross =
+    pos.side === "up" ? (px - pos.entry_px) * pos.qty : (pos.entry_px - px) * pos.qty;
+  const fee = feeUsd(px * pos.qty, exitFeeBps(led));
+  return gross - fee;
 }
 
 export function viewPaper(led: Ledger, m: MarketPx, kind: StoreKind): Paper {
   const mid = markPx(led, m);
-  const equity = led.cash_usd + led.btc * (mid || 0);
+  const u = unrealizedUsd(led, m);
+  const equity = led.open
+    ? led.starting_cash_usd + led.realized_pnl_usd + u
+    : led.cash_usd + led.btc * (mid || 0);
   const open = pendingRow(led);
   return {
     n: led.n,
@@ -468,7 +515,7 @@ export function viewPaper(led: Ledger, m: MarketPx, kind: StoreKind): Paper {
     cash_usd: led.cash_usd,
     equity_usd: equity,
     realized_pnl_usd: led.realized_pnl_usd,
-    unrealized_usd: unrealizedUsd(led, mid),
+    unrealized_usd: unrealizedUsd(led, m),
     fees_usd: led.fees_usd,
     starting_cash_usd: led.starting_cash_usd,
     clip_usd: led.clip_usd,
@@ -494,7 +541,9 @@ export function viewPaper(led: Ledger, m: MarketPx, kind: StoreKind): Paper {
     honest:
       "Aucun ordre Coinbase réel. Frais palier 0–10 k$ US (preneur 60 bp / faiseur 40 bp). " +
       "Aller-retour preneur = 120 bp, très au-dessus du |move| 5s typique (~1 bp) : le paper preneur devrait perdre. " +
-      "Short = notionnel virtuel (pas d’inventaire spot). Un jour vert ici voudrait dire qu’on peut parler live — pas avant.",
+      "Hit = direction mid/fill sans frais ; le PnL $ soustrait les deux jambes de frais. " +
+      "Faiseur = trade-through (pas un touch). Short = notionnel virtuel. " +
+      "Un jour vert ici voudrait dire qu’on peut parler live — pas avant.",
   };
 }
 
@@ -576,6 +625,11 @@ export async function snapshotPaper(m?: MarketPx): Promise<Paper> {
   );
 }
 
-export async function paperStoreKind(): Promise<StoreKind> {
-  return storeKind();
+export function newLedger(now: number, mode: PaperMode = "taker"): Ledger {
+  return emptyLedger(now, mode);
+}
+
+export function applyPaperStep(led: Ledger, m: MarketPx, signal: Signal): Ledger {
+  step(led, m, signal);
+  return led;
 }

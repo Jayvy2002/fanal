@@ -41,7 +41,19 @@ function binAbs(conf: number, bins: AbsBin[] | undefined, fallback: number): num
   return bins[bins.length - 1].mean_abs;
 }
 
-/** E[|5s move| bps | p, vol] calibrated on VAL. Used for the 1bp fire gate. */
+/**
+ * E[|move| bps | p, vol]. Must match train/train_fanal.py::predict_abs_move:
+ *   blended = 0.40 * lin + 0.35 * bin_e + 0.25 * typical
+ * Train vol_proxy always used sqrt(5), even for the 15s head — keep that for the gate.
+ * Do not substitute TEST gated |move| for calib.mean_abs_bps (that inflates the 1bp gate).
+ */
+export function volProxyBps(map: Record<string, number> | undefined, horizonS = 5): number {
+  const rv5 = map?.rv_5 ?? 0;
+  const rv60 = map?.rv_60 ?? 0;
+  const h = horizonS > 0 ? horizonS : 5;
+  return Math.max(rv5, rv60) * Math.sqrt(h) * 1e4;
+}
+
 export function expectedAbsMoveBps(
   pUp: number,
   calib: Calib | undefined,
@@ -49,20 +61,18 @@ export function expectedAbsMoveBps(
 ): number {
   const c = calib ?? {};
   const conf = Math.abs(pUp - 0.5);
-  const rv5 = map?.rv_5 ?? 0;
-  const rv60 = map?.rv_60 ?? 0;
-  const vol = Math.max(rv5, rv60) * Math.sqrt(5) * 1e4;
+  /* Gate / trees: same vol_proxy as training (sqrt 5). */
+  const volGate = volProxyBps(map, 5);
   const meanAbs = Math.max(c.mean_abs_bps ?? 0.5, 0.5);
-  const typical = meanAbs * (0.45 + 0.55 * Math.min(1, conf / 0.5));
-  const hasLin = c.abs_intercept != null || c.abs_beta_conf != null || c.abs_beta_vol != null;
-  const lin = hasLin
-    ? (c.abs_intercept ?? 0) + (c.abs_beta_conf ?? 0) * conf + (c.abs_beta_vol ?? 0) * vol
-    : 0.55 * typical + 0.45 * Math.max(vol, 0);
-  const fromBin = binAbs(conf, c.abs_bins, meanAbs);
-  const parts = [Math.max(0.05, typical)];
-  if (Number.isFinite(lin) && lin > 0) parts.push(lin);
-  if (Number.isFinite(fromBin) && fromBin > 0) parts.push(fromBin);
-  const blended = parts.reduce((a, b) => a + b, 0) / parts.length;
+  const typical = meanAbs * (0.45 + 0.55 * Math.min(1, Math.max(0, conf / 0.5)));
+  const hasAbs = c.abs_intercept != null || c.abs_beta_conf != null || c.abs_beta_vol != null;
+  let lin = hasAbs
+    ? (c.abs_intercept ?? 0) + (c.abs_beta_conf ?? 0) * conf + (c.abs_beta_vol ?? 0) * volGate
+    : volGate;
+  if (!Number.isFinite(lin)) lin = 0.05;
+  lin = Math.max(lin, 0.05);
+  const binE = binAbs(conf, c.abs_bins, meanAbs);
+  const blended = 0.4 * lin + 0.35 * (Number.isFinite(binE) ? binE : meanAbs) + 0.25 * typical;
   if (!Number.isFinite(blended)) return typical;
   return Math.max(0.05, Math.min(25, blended));
 }
@@ -108,7 +118,10 @@ function maybeOpen(lane: Lane, now: number, mid: number, signal: Signal, horizon
   if (lane.pending) return;
   if (!signal.gated || signal.side === "flat") return;
   const expected = signal.expected_move_bps;
-  const target = signal.target_px;
+  /* 15s tête: the gate number is 5s-calib (train). Stretch only the drawn path so it
+     is not a 5s move painted over 15s — paper never uses this lane. */
+  const pathBps = horizonS > 5 ? expected * Math.sqrt(horizonS / 5) : expected;
+  const target = mid * (1 + pathBps / 1e4);
   lane.pending = {
     ts: now,
     side: signal.side,
@@ -118,7 +131,7 @@ function maybeOpen(lane: Lane, now: number, mid: number, signal: Signal, horizon
     expected_move_bps: expected,
     resolve_ts: now + horizonS * 1000,
     hit: null,
-    path: projectPath(mid, expected, now, horizonS),
+    path: projectPath(mid, pathBps, now, horizonS),
     horizon_s: horizonS,
     p_up: signal.p_up,
   };

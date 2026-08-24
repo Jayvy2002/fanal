@@ -77,9 +77,10 @@ export default function App() {
       </main>
       <footer className="border-t border-line px-5 py-4 text-[11px] leading-relaxed text-muted">
         Jouet de recherche, pas un conseil financier. Prix live publics Coinbase Exchange (BTC-USD :
-        ticker, carnet, trades). Feu seulement si |move| prévu ≥ 1 bp. Paper 24 h persisté (Netlify
-        Blobs en prod) : un cold start ne wipe plus le carnet. Aucun ordre Coinbase réel — le live
-        n’est pas branché.
+        ticker, carnet, trades). Features = dernière barre 1s <strong>complète</strong> (pas la seconde
+        en cours). Feu seulement si |move| prévu ≥ 1 bp (même formule qu’à l’entraînement). Paper 24 h
+        persisté (Netlify Blobs) + cron 1 min <code>paper-tick</code> : un onglet en arrière-plan ne
+        fige plus le flatten. Aucun ordre Coinbase réel.
         {live?.test?.gated_acc != null && (
           <>
             {" "}
@@ -101,7 +102,9 @@ export default function App() {
             {live.coinbase_train.test.expectancy_1bp != null
               ? `, E1 ${live.coinbase_train.test.expectancy_1bp.toFixed(2).replace(".", ",")} bp`
               : ""}
-            {live.swapped_live === false ? " — poids non retenus (E1 / acc pas meilleurs)." : "."}
+            {live.swapped_live === false
+              ? " — poids non retenus (E1 / acc pas meilleurs). Vecteurs live : log_vol / CVD ramenés à l’échelle Binance ; le reste est sans dimension."
+              : "."}
           </>
         )}
       </footer>
