@@ -19,6 +19,8 @@ import {
   type PaperMode,
 } from "./paperFees";
 import { loadLedger, saveLedger, storeKind, type StoreKind } from "./paperStore";
+
+export { storeKind as paperStoreKind };
 import type { Ledger, PaperOrder, PaperPosition, PaperTrade } from "./paperTypes";
 import type { Paper, PaperRow, Signal } from "./types";
 
