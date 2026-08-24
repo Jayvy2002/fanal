@@ -1,5 +1,7 @@
 import lgbmJson from "../_models/fanal_sec_lgbm.json";
 import metaJson from "../_models/fanal_sec_meta.json";
+import lgbm15Json from "../_models/fanal_sec_lgbm_15.json";
+import meta15Json from "../_models/fanal_sec_meta_15.json";
 
 type Leaf = { v: number };
 type Split = {
@@ -16,20 +18,37 @@ type CompactModel = {
   trees: { nodes: Node[] }[];
 };
 
+export type Calib = {
+  beta_bps: number;
+  intercept_bps: number;
+  gated_up_mean_bps: number;
+  gated_down_mean_bps: number;
+  mean_abs_bps: number;
+};
+
 export type ModelMeta = {
   tau: number;
   features: string[];
+  horizon_s?: number;
+  enabled?: boolean;
+  horizon_15_enabled?: boolean;
   test: {
     gated_acc: number | null;
     n: number;
     coverage: number;
     naive_last_acc: number;
+    mean_abs_move_bps?: number | null;
+    expectancy_1bp?: number | null;
   };
   sanity: { x: number[]; p: number; raw: number }[];
+  calib?: Calib;
+  importance?: { name: string; gain: number }[];
 };
 
 const model = lgbmJson as CompactModel;
 const meta = metaJson as ModelMeta;
+const model15 = lgbm15Json as CompactModel;
+const meta15 = meta15Json as ModelMeta;
 
 function isLeaf(n: Node): n is Leaf {
   return "v" in n;
@@ -47,10 +66,14 @@ function scoreTree(nodes: Node[], x: number[]): number {
   return 0;
 }
 
-export function rawScore(x: number[]): number {
+function rawScoreOf(m: CompactModel, x: number[]): number {
   let s = 0;
-  for (const tree of model.trees) s += scoreTree(tree.nodes, x);
+  for (const tree of m.trees) s += scoreTree(tree.nodes, x);
   return s;
+}
+
+export function rawScore(x: number[]): number {
+  return rawScoreOf(model, x);
 }
 
 export function sigmoid(z: number): number {
@@ -63,11 +86,24 @@ export function sigmoid(z: number): number {
 }
 
 export function predictPUp(x: number[]): number {
-  return sigmoid(rawScore(x));
+  return sigmoid(rawScoreOf(model, x));
+}
+
+export function predictPUp15(x: number[]): number {
+  if (!model15?.trees?.length) return 0.5;
+  return sigmoid(rawScoreOf(model15, x));
 }
 
 export function getMeta(): ModelMeta {
   return meta;
+}
+
+export function getMeta15(): ModelMeta {
+  return meta15;
+}
+
+export function is15Enabled(): boolean {
+  return meta15?.enabled === true;
 }
 
 export function verifySanity(eps = 1e-5): void {

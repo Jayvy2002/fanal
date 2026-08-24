@@ -15,3 +15,5 @@ frontend/.vite/
 !.env.example
 .cursor/
 *.zip
+*.pkl
+*.pickle

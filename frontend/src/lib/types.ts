@@ -10,6 +10,15 @@ export type Signal = {
   why: string;
   close: number;
   tau: number;
+  expected_move_bps: number;
+  target_px: number;
+};
+
+export type WhyFeature = {
+  key: string;
+  label: string;
+  value: number;
+  display: string;
 };
 
 export type BookLevel = { p: number; q: number };
@@ -23,7 +32,30 @@ export type Book = {
   spread_bps: number;
 };
 
-export type SparkPoint = { t: number; p: number; side: Side | null };
+export type SparkPoint = {
+  t: number;
+  p: number;
+  o?: number;
+  h?: number;
+  l?: number;
+  side: Side | null;
+};
+
+export type PathPoint = { t: number; p: number };
+
+export type Forecast = {
+  ts: number;
+  side: "up" | "down";
+  label: "HAUSSIER" | "BAISSIER";
+  mid: number;
+  target_px: number;
+  expected_move_bps: number;
+  resolve_ts: number;
+  hit: boolean | null;
+  path: PathPoint[];
+  horizon_s: number;
+  p_up: number;
+};
 
 export type PaperRow = {
   ts: number;
@@ -51,17 +83,24 @@ export type LiveResponse = {
   flux: Signal & { ret_5_bps: number | null; rv_60: number | null };
   book: Book;
   spark: SparkPoint[];
+  forecasts: Forecast[];
+  why: WhyFeature[];
   paper: Paper;
   error: string | null;
   kind: string;
   horizon_s: number;
   bar_s: number;
   tau: number;
+  now: number;
+  venue: string;
+  product: string;
   test: {
     gated_acc: number | null;
     n: number;
     coverage: number;
     naive_last_acc: number;
+    mean_abs_move_bps?: number | null;
+    expectancy_1bp?: number | null;
   };
 };
 
