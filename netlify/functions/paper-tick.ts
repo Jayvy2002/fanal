@@ -23,7 +23,3 @@ export const handler = async () => {
     return json(500, { ok: false, error: msg });
   }
 };
-
-export const config = {
-  schedule: "* * * * *",
-};
