@@ -62,7 +62,10 @@ export default function App() {
               <Hero live={live} />
               <LiveChart live={live} />
               <WhyStrip live={live} />
-              <PaperTable live={live} />
+              <PaperTable
+                live={live}
+                onPaper={(paper) => setLive((cur) => (cur ? { ...cur, paper } : cur))}
+              />
             </>
           ) : (
             <div className="rounded-xl border border-line bg-card px-6 py-16 text-center text-muted">
@@ -74,8 +77,9 @@ export default function App() {
       </main>
       <footer className="border-t border-line px-5 py-4 text-[11px] leading-relaxed text-muted">
         Jouet de recherche, pas un conseil financier. Prix live publics Coinbase Exchange (BTC-USD :
-        ticker, carnet, trades). Feu seulement si |move| prévu ≥ 1 bp. Le paper trading est en mémoire
-        par instance Netlify — un redémarrage à froid remet le compteur à zéro.
+        ticker, carnet, trades). Feu seulement si |move| prévu ≥ 1 bp. Paper 24 h persisté (Netlify
+        Blobs en prod) : un cold start ne wipe plus le carnet. Aucun ordre Coinbase réel — le live
+        n’est pas branché.
         {live?.test?.gated_acc != null && (
           <>
             {" "}

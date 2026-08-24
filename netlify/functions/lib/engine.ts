@@ -3,7 +3,8 @@ import { bookFromDepth } from "./book";
 import { COINBASE_PRODUCT, fetchBook, fetchStats, fetchTicker, parseTradeTime } from "./coinbase";
 import { computeFeatureMap, retBps, rvWindow, sparkFrom, vectorFromMap, whyStrip } from "./features";
 import { expectedAbsMoveBps, expectedMoveBps, updateForecasts } from "./forecasts";
-import { updatePaper } from "./paper";
+import { paperStoreKind, snapshotPaper, stepPaper, setPaperMode, type MarketPx } from "./paper";
+import type { PaperMode } from "./paperFees";
 import { getMeta, getMeta15, is15Enabled, predictPUp, predictPUp15, verifySanity } from "./scorer";
 import type { HealthResponse, LiveResponse, Signal, SparkPoint, TickerResponse } from "./types";
 
@@ -166,7 +167,18 @@ export async function buildLive(): Promise<LiveResponse> {
     }
 
     const mid = book.mid || close;
-    const paper = updatePaper(now, mid, signal);
+    const lastBar = klines[klines.length - 1];
+    const market: MarketPx = {
+      now,
+      mid,
+      bid: book.bids[0]?.p ?? 0,
+      ask: book.asks[0]?.p ?? 0,
+      last: close,
+      low: lastBar?.l ?? close,
+      high: lastBar?.h ?? close,
+      bars: klines.slice(-12).map((k) => ({ t: k.t, h: k.h, l: k.l })),
+    };
+    const paper = await stepPaper(market, signal);
     const forecasts = updateForecasts({ now, mid, signal5: signal, signal15 });
     const spark = markSpark(sparkFrom(klines, 300), forecasts);
     const ret5 = retBps(klines, 5);
@@ -198,7 +210,7 @@ export async function buildLive(): Promise<LiveResponse> {
     error = err instanceof Error ? err.message : "live_error";
     const close = 0;
     const signal = makeSignal(0.5, close, 5, tau, calib, minMove);
-    const paper = updatePaper(Date.now(), 0, { ...signal, gated: false, side: "flat", label: "NEUTRE" });
+    const paper = await snapshotPaper();
     return {
       signal,
       flux: { ...signal, ret_5_bps: null, rv_60: null },
@@ -246,7 +258,7 @@ export async function buildBook() {
   return bookFromDepth(depth);
 }
 
-export function buildHealth(): HealthResponse {
+export async function buildHealth(): Promise<HealthResponse> {
   const meta = getMeta();
   return {
     ok: true,
@@ -257,19 +269,48 @@ export function buildHealth(): HealthResponse {
     min_move_bps: meta.min_move_bps ?? meta.calib?.min_move_bps ?? 1.0,
     symbol: COINBASE_PRODUCT,
     venue: "coinbase",
-    paper: "memory",
+    paper: await paperStoreKind(),
   };
+}
+
+export type ApiRequest = {
+  method?: string;
+  body?: string;
+};
+
+export async function handlePaper(
+  req?: ApiRequest,
+): Promise<{ status: number; body: unknown }> {
+  const method = (req?.method || "GET").toUpperCase();
+  if (method === "OPTIONS") return { status: 204, body: "" };
+  if (method === "GET") return { status: 200, body: await snapshotPaper() };
+  if (method === "POST") {
+    let parsed: { mode?: string } = {};
+    try {
+      parsed = req?.body ? (JSON.parse(req.body) as { mode?: string }) : {};
+    } catch {
+      return { status: 400, body: { error: "json_invalide" } };
+    }
+    const mode = parsed.mode as PaperMode | undefined;
+    if (mode !== "taker" && mode !== "maker") {
+      return { status: 400, body: { error: "mode_invalide", hint: "taker | maker" } };
+    }
+    return { status: 200, body: await setPaperMode(mode) };
+  }
+  return { status: 405, body: { error: "methode" } };
 }
 
 export async function handleApi(
   path: string,
+  req?: ApiRequest,
 ): Promise<{ status: number; body: unknown }> {
   const p = path.split("?")[0].replace(/\/$/, "") || "/";
   try {
-    if (p.endsWith("/health")) return { status: 200, body: buildHealth() };
+    if (p.endsWith("/health")) return { status: 200, body: await buildHealth() };
     if (p.endsWith("/ticker")) return { status: 200, body: await buildTicker() };
     if (p.endsWith("/book")) return { status: 200, body: await buildBook() };
     if (p.endsWith("/live")) return { status: 200, body: await buildLive() };
+    if (p.endsWith("/paper")) return handlePaper(req);
     return { status: 404, body: { error: "not_found" } };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "error";

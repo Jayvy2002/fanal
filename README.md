@@ -46,6 +46,29 @@ Le réentraînement Coinbase **n’a pas** remplacé les poids live : E après 1
 
 Un edge directionnel vs naive ~51–53 % est réel ; après 1 bp de friction l’espérance 5s reste **négative**. Ce n’est pas un edge ATM — on ne maquille pas les chiffres.
 
+## Paper 24 h (pas de live)
+
+Objectif : laisser https://fanal.netlify.app ouvert **24 heures** et voir si le carnet virtuel est profitable. Un jour vert voudrait dire qu’on peut **discuter** d’un live Coinbase Advanced Trade spot BTC-USD — pas avant.
+
+| | |
+|---|---|
+| Capital virtuel | **1 000 $ US** |
+| Clip | **75 $ US** (~0,001 BTC) par signal |
+| Positions | **une à la fois**, flatten à l’horizon **5 s** |
+| Entrée | feu live **et** `|move|` ≥ `PAPER_MIN_MOVE_BPS` (défaut **1,0** ; constante relevable pour coller à l’aller-retour de frais) |
+| Preneur (défaut) | fill immédiat bid/ask, frais **taker des deux côtés** |
+| Faiseur / post-only | achat au **bid** (fill si le prix trade dessous), vente à l’**ask** (fill si dessus) ; sinon **annulé** à l’horizon. Sortie faiseur, sinon flatten preneur. |
+| Frais | palier retail Coinbase Advanced Trade **0–10 000 $ US / 30 j** : preneur **60 bp**, faiseur **40 bp** ([barème public](https://help.coinbase.com/en/exchange/trading-and-funding/exchange-fees)). Aller-retour preneur = **120 bp**. |
+| Short | notionnel virtuel — le spot BTC-USD n’a pas d’inventaire à découvert. |
+| Horloge | chaque `GET /api/live` (l’UI poll **1 s**). **Laisser l’onglet au premier plan** : un onglet en arrière-plan est ralenti, et Netlify n’a pas de cron à 1 s. |
+| Persistance | store Blobs `fanal-paper` / clé `ledger` (`consistency: strong`). En local : `/tmp/fanal-paper-ledger.json`. |
+
+Le paper preneur 5 s **devrait perdre** : 120 bp de friction vs ~1 bp de move. L’UI n’en cache rien (cash, equity, PnL réalisé, frais, taux de hits, n, position, mode).
+
+`POST /api/paper` `{ "mode": "taker" | "maker" }` change le mode. `GET /api/paper` relit le carnet sans avancer l’horloge.
+
+**Non branché** : pas de clés API, pas d’ordres Advanced Trade, pas de retraits.
+
 ## Lancer en local
 
 ```bash
@@ -89,11 +112,13 @@ Le SPA fallback `/* → /index.html` est **après** `/api/* → /.netlify/functi
 
 Chaque invocation interroge Coinbase Exchange (`api.exchange.coinbase.com`, BTC-USD), reconstruit les barres 1s, calcule les features, et score le LightGBM en TypeScript (arbres JSON, booster en cache module). Aucun secret. Aucun appel Binance depuis le navigateur ni depuis les functions live.
 
-Le paper trading 5s est **en mémoire par instance** : un cold start Netlify remet le taux de hits à zéro.
+Le paper 5s est **persisté** via Netlify Blobs : un cold start ne wipe plus le livre. Le trading live **n’est pas** branché.
 
 ## API
 
-- `GET /api/health`
+- `GET /api/health` — `paper` = `"blobs"` | `"file"` (plus `"memory"`)
 - `GET /api/ticker` — ticker Coinbase BTC-USD (+ stats 24h)
 - `GET /api/book` — profondeur niveau 2, mid, OBI 10
-- `GET /api/live` — signal (`close`, `p_up`, `gated`, `horizon_s`, `expected_move_bps`, `min_move_bps`, `target_px`) + spark ~300 points `{t,p}` + `forecasts[]` (path, hit, target) + paper + carnet + bande pourquoi
+- `GET /api/live` — signal + spark + `forecasts[]` + **paper persisté** + carnet + bande pourquoi. Avance le paper d’un pas.
+- `GET /api/paper` — snapshot du carnet (sans pas de simulation)
+- `POST /api/paper` — `{ "mode": "taker" | "maker" }`
