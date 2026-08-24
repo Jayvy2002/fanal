@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Header } from "./components/Header";
 import { Hero } from "./components/Hero";
-import { Spark } from "./components/Spark";
+import { LiveChart } from "./components/LiveChart";
+import { WhyStrip } from "./components/WhyStrip";
 import { PaperTable } from "./components/PaperTable";
 import { OrderBook } from "./components/OrderBook";
 import type { LiveResponse, TickerResponse } from "./lib/types";
@@ -42,7 +43,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="mx-auto min-h-screen max-w-[1400px]">
+    <div className="mx-auto min-h-screen max-w-[1440px]">
       <Header
         ticker={ticker}
         tau={live?.tau ?? 0.58}
@@ -58,20 +59,31 @@ export default function App() {
           {live ? (
             <>
               <Hero live={live} />
-              <Spark live={live} />
+              <LiveChart live={live} />
+              <WhyStrip live={live} />
               <PaperTable live={live} />
             </>
           ) : (
             <div className="rounded-xl border border-line bg-card px-6 py-16 text-center text-muted">
-              Connexion au flux Binance…
+              Connexion au flux Coinbase BTC-USD…
             </div>
           )}
         </div>
         {live ? <OrderBook book={live.book} /> : <div className="rounded-xl border border-line bg-card" />}
       </main>
       <footer className="border-t border-line px-5 py-4 text-[11px] leading-relaxed text-muted">
-        Jouet de recherche, pas un conseil financier. Données publiques Binance (BTCUSDT, bougies 1s + carnet).
-        Le paper trading est en mémoire par instance Netlify — un redémarrage à froid remet le compteur à zéro.
+        Jouet de recherche, pas un conseil financier. Prix live publics Coinbase Exchange (BTC-USD :
+        ticker, carnet, trades). Le modèle 5s a été entraîné hors-ligne sur des archives 1s Binance
+        Vision (features relatives, sans fuite). Le paper trading est en mémoire par instance Netlify —
+        un redémarrage à froid remet le compteur à zéro.
+        {live?.test?.gated_acc != null && (
+          <>
+            {" "}
+            Test OOS : {(live.test.gated_acc * 100).toFixed(1).replace(".", ",")} % gated vs naive{" "}
+            {(live.test.naive_last_acc * 100).toFixed(1).replace(".", ",")} % (couverture{" "}
+            {(live.test.coverage * 100).toFixed(0).replace(".", ",")} %).
+          </>
+        )}
       </footer>
     </div>
   );

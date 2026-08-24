@@ -6,10 +6,19 @@ export type Signal = {
   p_up: number;
   confidence: number;
   gated: boolean;
-  horizon_s: 5;
+  horizon_s: number;
   why: string;
   close: number;
   tau: number;
+  expected_move_bps: number;
+  target_px: number;
+};
+
+export type WhyFeature = {
+  key: string;
+  label: string;
+  value: number;
+  display: string;
 };
 
 export type BookLevel = { p: number; q: number };
@@ -23,7 +32,30 @@ export type Book = {
   spread_bps: number;
 };
 
-export type SparkPoint = { t: number; p: number; side: Side | null };
+export type SparkPoint = {
+  t: number;
+  p: number;
+  o?: number;
+  h?: number;
+  l?: number;
+  side: Side | null;
+};
+
+export type PathPoint = { t: number; p: number };
+
+export type Forecast = {
+  ts: number;
+  side: Exclude<Side, "flat">;
+  label: "HAUSSIER" | "BAISSIER";
+  mid: number;
+  target_px: number;
+  expected_move_bps: number;
+  resolve_ts: number;
+  hit: boolean | null;
+  path: PathPoint[];
+  horizon_s: number;
+  p_up: number;
+};
 
 export type PaperRow = {
   ts: number;
@@ -33,7 +65,7 @@ export type PaperRow = {
   mid_end: number | null;
   hit: boolean | null;
   signed_bps: number | null;
-  horizon_s: 5;
+  horizon_s: number;
 };
 
 export type Paper = {
@@ -43,7 +75,7 @@ export type Paper = {
   pending: PaperRow | null;
   remaining_s: number;
   recent: PaperRow[];
-  horizon_s: 5;
+  horizon_s: number;
 };
 
 export type TestMeta = {
@@ -51,6 +83,8 @@ export type TestMeta = {
   n: number;
   coverage: number;
   naive_last_acc: number;
+  mean_abs_move_bps?: number | null;
+  expectancy_1bp?: number | null;
 };
 
 export type LiveResponse = {
@@ -58,12 +92,17 @@ export type LiveResponse = {
   flux: Signal & { ret_5_bps: number | null; rv_60: number | null };
   book: Book;
   spark: SparkPoint[];
+  forecasts: Forecast[];
+  why: WhyFeature[];
   paper: Paper;
   error: string | null;
   kind: "lgbm";
-  horizon_s: 5;
-  bar_s: 1;
+  horizon_s: number;
+  bar_s: number;
   tau: number;
+  now: number;
+  venue: "coinbase";
+  product: "BTC-USD";
   test: TestMeta;
 };
 
@@ -81,9 +120,10 @@ export type TickerResponse = {
 export type HealthResponse = {
   ok: boolean;
   kind: "lgbm";
-  horizon_s: 5;
-  bar_s: 1;
+  horizon_s: number;
+  bar_s: number;
   tau: number;
   symbol: string;
+  venue: "coinbase";
   paper: "memory";
 };
