@@ -1,15 +1,28 @@
 import {
   CLIP_USD,
+  DEFAULT_PAPER_HORIZON_S,
+  DEFAULT_PAPER_MODE,
+  EXCHANGE_FEE,
+  FEE_CAVEAT,
+  FEE_PRODUCT,
+  FEE_SOURCE_ADVANCED,
+  FEE_SOURCE_EXCHANGE,
   FEE_TIER_LABEL,
-  HORIZON_MS,
+  FEE_VERIFIED_VS_OFFICIAL,
+  LEDGER_VERSION,
   MAKER_FEE_BPS,
   MAX_RECENT,
-  PAPER_MIN_MOVE_BPS,
   STARTING_CASH_USD,
   TAKER_FEE_BPS,
+  feePublicView,
   feeUsd,
+  isPaperHorizon,
+  makerRoundTripBps,
+  paperGateBps,
   roundTripFeeBps,
+  takerRoundTripBps,
   type FillRole,
+  type PaperHorizonS,
   type PaperMode,
 } from "./paperFees";
 import { loadLedger, saveLedger, storeKind, type StoreKind } from "./paperStore";
@@ -31,12 +44,33 @@ export type MarketPx = {
   bars?: MarketBar[];
 };
 
-function emptyLedger(now: number, mode: PaperMode = "taker"): Ledger {
+export type PaperSignals = {
+  five: Signal;
+  sixty: Signal;
+};
+
+export { storeKind as paperStoreKind } from "./paperStore";
+
+function horizonOf(led: Ledger): number {
+  return led.horizon_s > 0 ? led.horizon_s : DEFAULT_PAPER_HORIZON_S;
+}
+
+function horizonMs(led: Ledger): number {
+  return horizonOf(led) * 1000;
+}
+
+function emptyLedger(
+  now: number,
+  mode: PaperMode = DEFAULT_PAPER_MODE,
+  horizonS: number = DEFAULT_PAPER_HORIZON_S,
+): Ledger {
+  const h = isPaperHorizon(horizonS) ? horizonS : DEFAULT_PAPER_HORIZON_S;
   return {
-    v: 1,
+    v: LEDGER_VERSION,
     started_ts: now,
     updated_ts: now,
     mode,
+    horizon_s: h,
     starting_cash_usd: STARTING_CASH_USD,
     cash_usd: STARTING_CASH_USD,
     btc: 0,
@@ -44,11 +78,12 @@ function emptyLedger(now: number, mode: PaperMode = "taker"): Ledger {
     fees_usd: 0,
     n: 0,
     hits: 0,
+    hits_after_fees: 0,
     n_cancelled: 0,
     n_maker_fills: 0,
     n_taker_fills: 0,
     clip_usd: CLIP_USD,
-    min_move_bps: PAPER_MIN_MOVE_BPS,
+    min_move_bps: paperGateBps(h),
     last_entry_attempt_ts: 0,
     mark_px: 0,
     open: null,
@@ -107,9 +142,12 @@ function fingerprint(led: Ledger): string {
   const pend = led.pending;
   const last = led.recent[0];
   return [
+    led.v,
     led.mode,
+    led.horizon_s,
     led.n,
     led.hits,
+    led.hits_after_fees,
     led.n_cancelled,
     led.cash_usd.toFixed(6),
     led.btc.toFixed(10),
@@ -159,10 +197,11 @@ function closeRoundTrip(
     signed_bps: signed,
     hit,
     cancelled: false,
-    horizon_s: HORIZON_MS / 1000,
+    horizon_s: horizonOf(led),
   };
   led.n += 1;
   if (hit) led.hits += 1;
+  if (pnl > 0) led.hits_after_fees += 1;
   led.realized_pnl_usd += pnl;
   led.recent.unshift(trade);
   if (led.recent.length > MAX_RECENT) led.recent.pop();
@@ -194,6 +233,7 @@ function flattenTaker(led: Ledger, pos: PaperPosition, m: MarketPx): void {
 function enterTaker(led: Ledger, signal: Signal, m: MarketPx): void {
   const side = signal.side as "up" | "down";
   const label = signal.label as "HAUSSIER" | "BAISSIER";
+  const hz = horizonMs(led);
   if (side === "up") {
     const px = buyPx(m);
     const qty = clipQty(px);
@@ -211,7 +251,7 @@ function enterTaker(led: Ledger, signal: Signal, m: MarketPx): void {
       entry_ts: m.now,
       entry_fee_usd: fee,
       entry_role: "taker",
-      flatten_ts: m.now + HORIZON_MS,
+      flatten_ts: m.now + hz,
       expected_move_bps: signal.expected_move_bps,
     };
   } else {
@@ -231,7 +271,7 @@ function enterTaker(led: Ledger, signal: Signal, m: MarketPx): void {
       entry_ts: m.now,
       entry_fee_usd: fee,
       entry_role: "taker",
-      flatten_ts: m.now + HORIZON_MS,
+      flatten_ts: m.now + hz,
       expected_move_bps: signal.expected_move_bps,
     };
   }
@@ -256,7 +296,7 @@ function placeMakerEntry(led: Ledger, signal: Signal, m: MarketPx): void {
     limit_px: limit,
     qty,
     placed_ts: m.now,
-    expire_ts: m.now + HORIZON_MS,
+    expire_ts: m.now + horizonMs(led),
     expected_move_bps: signal.expected_move_bps,
   };
   led.last_entry_attempt_ts = m.now;
@@ -264,8 +304,8 @@ function placeMakerEntry(led: Ledger, signal: Signal, m: MarketPx): void {
 }
 
 function fillMakerEntry(led: Ledger, order: PaperOrder, m: MarketPx): void {
-  const horizonEnd = order.placed_ts + HORIZON_MS;
-  /* Flatten à l’horizon du signal (placement), pas +5s après le fill. */
+  const horizonEnd = order.placed_ts + horizonMs(led);
+  /* Flatten à l’horizon du signal (placement), pas +H après le fill. */
   if (m.now >= horizonEnd) {
     cancelEntry(led, order, m.now);
     return;
@@ -346,7 +386,7 @@ function cancelEntry(led: Ledger, order: PaperOrder, now: number): void {
     signed_bps: null,
     hit: null,
     cancelled: true,
-    horizon_s: HORIZON_MS / 1000,
+    horizon_s: horizonOf(led),
   };
   led.recent.unshift(trade);
   if (led.recent.length > MAX_RECENT) led.recent.pop();
@@ -355,14 +395,21 @@ function cancelEntry(led: Ledger, order: PaperOrder, now: number): void {
   led.updated_ts = now;
 }
 
+function pickSignal(led: Ledger, signals: PaperSignals | Signal): Signal {
+  if ("five" in signals && "sixty" in signals) {
+    return horizonOf(led) === 5 ? signals.five : signals.sixty;
+  }
+  return signals;
+}
+
 function canEnter(led: Ledger, signal: Signal, m: MarketPx): boolean {
   if (led.open || led.pending) return false;
   if (!signal.gated || signal.side === "flat") return false;
-  /* Paper = tête 5s uniquement. Un feu 15s ne doit pas ouvrir une position. */
-  if ((signal.horizon_s ?? 5) !== HORIZON_MS / 1000) return false;
-  const minMove = signal.min_move_bps ?? led.min_move_bps;
+  const want = horizonOf(led);
+  if ((signal.horizon_s ?? want) !== want) return false;
+  const minMove = paperGateBps(want);
   if (!(Math.abs(signal.expected_move_bps) >= minMove - 1e-12)) return false;
-  if (led.last_entry_attempt_ts > 0 && m.now - led.last_entry_attempt_ts < HORIZON_MS - 200) {
+  if (led.last_entry_attempt_ts > 0 && m.now - led.last_entry_attempt_ts < horizonMs(led) - 200) {
     return false;
   }
   if (!(m.mid > 0) || !(buyPx(m) > 0) || !(sellPx(m) > 0)) return false;
@@ -373,11 +420,13 @@ function enforceOnePosition(led: Ledger): void {
   if (led.open && led.pending?.kind === "entry") led.pending = null;
 }
 
-function step(led: Ledger, m: MarketPx, signal: Signal): void {
+function step(led: Ledger, m: MarketPx, signals: PaperSignals | Signal): void {
   if (!(m.now > 0) || !(m.mid > 0)) return;
   led.mark_px = m.mid;
-  led.min_move_bps = PAPER_MIN_MOVE_BPS;
+  led.min_move_bps = paperGateBps(horizonOf(led));
+  if (typeof led.hits_after_fees !== "number") led.hits_after_fees = 0;
   enforceOnePosition(led);
+  const signal = pickSignal(led, signals);
 
   let freed = false;
   if (led.pending?.kind === "exit" && led.open) {
@@ -433,7 +482,8 @@ function tradeToRow(t: PaperTrade): PaperRow {
   };
 }
 
-function pendingRow(led: Ledger): PaperRow | null {
+function pendingRow(led: Ledger, now: number): PaperRow | null {
+  const hz = horizonOf(led);
   if (led.open) {
     return {
       ts: led.open.entry_ts,
@@ -443,9 +493,11 @@ function pendingRow(led: Ledger): PaperRow | null {
       mid_end: null,
       hit: null,
       signed_bps: null,
-      horizon_s: HORIZON_MS / 1000,
+      horizon_s: hz,
       entry_role: led.open.entry_role,
       status: "open",
+      posted_px: led.pending?.kind === "exit" ? led.pending.limit_px : led.open.entry_px,
+      age_s: Math.max(0, (now - led.open.entry_ts) / 1000),
     };
   }
   if (led.pending?.kind === "entry") {
@@ -457,8 +509,10 @@ function pendingRow(led: Ledger): PaperRow | null {
       mid_end: null,
       hit: null,
       signed_bps: null,
-      horizon_s: HORIZON_MS / 1000,
+      horizon_s: hz,
       status: "pending_entry",
+      posted_px: led.pending.limit_px,
+      age_s: Math.max(0, (now - led.pending.placed_ts) / 1000),
     };
   }
   return null;
@@ -468,12 +522,6 @@ function remainingS(led: Ledger, now: number): number {
   const t = led.open?.flatten_ts ?? (led.pending ? led.pending.expire_ts : 0);
   if (!t) return 0;
   return Math.max(0, (t - now) / 1000);
-}
-
-function markPx(led: Ledger, m: MarketPx): number {
-  if (m.mid > 0) return m.mid;
-  if (led.mark_px > 0) return led.mark_px;
-  return 0;
 }
 
 function exitMarkPx(pos: PaperPosition, m: MarketPx): number {
@@ -493,38 +541,87 @@ function unrealizedUsd(led: Ledger, m: MarketPx): number {
   const gross =
     pos.side === "up" ? (px - pos.entry_px) * pos.qty : (pos.entry_px - px) * pos.qty;
   const fee = feeUsd(px * pos.qty, exitFeeBps(led));
-  return gross - fee;
+  return gross - pos.entry_fee_usd - fee;
+}
+
+function equityUsd(led: Ledger, m: MarketPx): number {
+  if (!led.open) return led.cash_usd;
+  const pos = led.open;
+  const px = exitMarkPx(pos, m);
+  if (!(px > 0)) return led.cash_usd;
+  const fee = feeUsd(px * pos.qty, exitFeeBps(led));
+  if (pos.side === "up") return led.cash_usd + pos.qty * px - fee;
+  return led.cash_usd - pos.qty * px - fee;
+}
+
+function honestBlurb(led: Ledger): string {
+  const hz = horizonOf(led);
+  const gate = paperGateBps(hz);
+  if (hz === 60) {
+    return (
+      "Aucun ordre Coinbase réel. Paper = faiseur 60s par défaut, gate = aller-retour faiseur " +
+      `(${makerRoundTripBps()} bp), pas le feu 5s du graphique. ` +
+      `Frais Advanced Trade palier d’entrée (hypothèse non vérifiée vs table officielle derrière login) : ` +
+      `preneur ${TAKER_FEE_BPS} bp / faiseur ${MAKER_FEE_BPS} bp. ` +
+      `|move| 60s BTC ~10 bp vs ${makerRoundTripBps()} bp de friction faiseur : couverture minuscule, ` +
+      "E après frais probablement négative. Hit* = direction sans frais ; hits après frais = PnL $ > 0. " +
+      "Faiseur = trade-through strict (pas un touch). Sortie faiseur sinon flatten preneur. " +
+      "Un jour vert ici voudrait dire qu’on peut parler live — pas avant."
+    );
+  }
+  return (
+    "Aucun ordre Coinbase réel. Paper 5s preneur = opt-in de comparaison (pas le défaut). " +
+    `Frais Advanced Trade hypothèse intro : preneur ${TAKER_FEE_BPS} bp / faiseur ${MAKER_FEE_BPS} bp. ` +
+    `Aller-retour preneur = ${takerRoundTripBps()} bp vs |move| 5s ~1 bp et gate ${gate} bp : ` +
+    "le paper preneur 5s doit perdre. Hit* = direction sans frais. Pas d’ordres live."
+  );
 }
 
 export function viewPaper(led: Ledger, m: MarketPx, kind: StoreKind): Paper {
-  const mid = markPx(led, m);
+  const now = m.now || led.updated_ts;
   const u = unrealizedUsd(led, m);
-  const equity = led.open
-    ? led.starting_cash_usd + led.realized_pnl_usd + u
-    : led.cash_usd + led.btc * (mid || 0);
-  const open = pendingRow(led);
+  const equity = equityUsd(led, m);
+  const open = pendingRow(led, now);
+  const fees = feePublicView();
   return {
     n: led.n,
     hits: led.hits,
+    hits_after_fees: led.hits_after_fees ?? 0,
     hit_rate: led.n > 0 ? led.hits / led.n : null,
+    hit_rate_after_fees: led.n > 0 ? (led.hits_after_fees ?? 0) / led.n : null,
     pending: open,
-    remaining_s: remainingS(led, m.now || led.updated_ts),
+    remaining_s: remainingS(led, now),
     recent: led.recent.map(tradeToRow),
-    horizon_s: HORIZON_MS / 1000,
+    horizon_s: horizonOf(led),
     mode: led.mode,
     cash_usd: led.cash_usd,
     equity_usd: equity,
     realized_pnl_usd: led.realized_pnl_usd,
-    unrealized_usd: unrealizedUsd(led, m),
+    unrealized_usd: u,
     fees_usd: led.fees_usd,
     starting_cash_usd: led.starting_cash_usd,
     clip_usd: led.clip_usd,
     min_move_bps: led.min_move_bps,
     n_cancelled: led.n_cancelled,
+    n_maker_fills: led.n_maker_fills,
+    n_taker_fills: led.n_taker_fills,
+    fee_product: FEE_PRODUCT,
     fee_tier: FEE_TIER_LABEL,
     taker_fee_bps: TAKER_FEE_BPS,
     maker_fee_bps: MAKER_FEE_BPS,
     round_trip_fee_bps: roundTripFeeBps(led.mode),
+    round_trip_maker_bps: makerRoundTripBps(),
+    round_trip_taker_bps: takerRoundTripBps(),
+    fee_caveat: FEE_CAVEAT,
+    fee_verified_vs_official: FEE_VERIFIED_VS_OFFICIAL,
+    official_advanced_url: FEE_SOURCE_ADVANCED,
+    official_exchange_url: FEE_SOURCE_EXCHANGE,
+    exchange_alternate: {
+      product: EXCHANGE_FEE.product,
+      taker_bps: EXCHANGE_FEE.taker_bps,
+      maker_bps: EXCHANGE_FEE.maker_bps,
+      used: false,
+    },
     persisted: true,
     store: kind,
     started_ts: led.started_ts,
@@ -536,22 +633,45 @@ export function viewPaper(led: Ledger, m: MarketPx, kind: StoreKind): Paper {
           qty: led.open.qty,
           entry_px: led.open.entry_px,
           role: led.open.entry_role,
+          posted_px: led.pending?.kind === "exit" ? led.pending.limit_px : led.open.entry_px,
+          age_s: Math.max(0, (now - led.open.entry_ts) / 1000),
         }
-      : null,
-    honest:
-      "Aucun ordre Coinbase réel. Frais palier 0–10 k$ US (preneur 60 bp / faiseur 40 bp). " +
-      "Aller-retour preneur = 120 bp, très au-dessus du |move| 5s typique (~1 bp) : le paper preneur devrait perdre. " +
-      "Hit = direction mid/fill sans frais ; le PnL $ soustrait les deux jambes de frais. " +
-      "Faiseur = trade-through (pas un touch). Short = notionnel virtuel. " +
-      "Un jour vert ici voudrait dire qu’on peut parler live — pas avant.",
+      : led.pending?.kind === "entry"
+        ? {
+            side: led.pending.side,
+            label: led.pending.label,
+            qty: led.pending.qty,
+            entry_px: led.pending.limit_px,
+            role: "maker",
+            posted_px: led.pending.limit_px,
+            age_s: Math.max(0, (now - led.pending.placed_ts) / 1000),
+          }
+        : null,
+    honest: honestBlurb(led),
   };
 }
 
+function isV2Ledger(raw: unknown): raw is Ledger {
+  if (!raw || typeof raw !== "object") return false;
+  const led = raw as Ledger;
+  return (
+    led.v === LEDGER_VERSION &&
+    isPaperHorizon(led.horizon_s) &&
+    (led.mode === "taker" || led.mode === "maker") &&
+    typeof led.cash_usd === "number"
+  );
+}
+
 function hydrate(loaded: Awaited<ReturnType<typeof loadLedger>>, now: number): Ledger {
-  if (loaded.ledger && loaded.ledger.v === 1) {
-    if (typeof loaded.ledger.mark_px !== "number") loaded.ledger.mark_px = 0;
-    return loaded.ledger;
+  if (isV2Ledger(loaded.ledger)) {
+    const led = loaded.ledger;
+    if (typeof led.mark_px !== "number") led.mark_px = 0;
+    if (typeof led.hits_after_fees !== "number") led.hits_after_fees = 0;
+    if (typeof led.n_maker_fills !== "number") led.n_maker_fills = 0;
+    if (typeof led.n_taker_fills !== "number") led.n_taker_fills = 0;
+    return led;
   }
+  /* v1 5s taker (ou objet inconnu) : nouveau carnet 60s faiseur, cash 1000. */
   return emptyLedger(now);
 }
 
@@ -561,7 +681,7 @@ async function transact(mut: (led: Ledger) => void): Promise<{ ledger: Ledger; k
   let last: { ledger: Ledger; kind: StoreKind } | null = null;
   for (let i = 0; i < 6; i++) {
     const loaded = await loadLedger();
-    const created = !(loaded.ledger && loaded.ledger.v === 1);
+    const created = !isV2Ledger(loaded.ledger);
     const led = hydrate(loaded, Date.now());
     const before = fingerprint(led);
     mut(led);
@@ -573,9 +693,9 @@ async function transact(mut: (led: Ledger) => void): Promise<{ ledger: Ledger; k
   return last ?? { ledger: emptyLedger(Date.now()), kind: await storeKind() };
 }
 
-export async function stepPaper(m: MarketPx, signal: Signal): Promise<Paper> {
+export async function stepPaper(m: MarketPx, signals: PaperSignals | Signal): Promise<Paper> {
   const run = chain.then(async () => {
-    const { ledger, kind } = await transact((led) => step(led, m, signal));
+    const { ledger, kind } = await transact((led) => step(led, m, signals));
     return viewPaper(ledger, m, kind);
   });
   chain = run.then(
@@ -585,11 +705,23 @@ export async function stepPaper(m: MarketPx, signal: Signal): Promise<Paper> {
   return run;
 }
 
-export async function setPaperMode(mode: PaperMode): Promise<Paper> {
-  if (mode !== "taker" && mode !== "maker") throw new Error("mode_invalide");
+export async function setPaperConfig(opts: {
+  mode?: PaperMode;
+  horizonSec?: number;
+}): Promise<Paper> {
+  const mode = opts.mode;
+  const horizonSec = opts.horizonSec;
+  if (mode != null && mode !== "taker" && mode !== "maker") throw new Error("mode_invalide");
+  if (horizonSec != null && !isPaperHorizon(horizonSec)) throw new Error("horizon_invalide");
   const { ledger, kind } = await transact((led) => {
-    led.mode = mode;
-    led.updated_ts = Date.now();
+    const nextMode = mode ?? led.mode;
+    const nextH = (horizonSec ?? led.horizon_s) as PaperHorizonS;
+    if (led.mode !== nextMode || horizonOf(led) !== nextH) {
+      const fresh = emptyLedger(Date.now(), nextMode, nextH);
+      Object.assign(led, fresh);
+    } else {
+      led.updated_ts = Date.now();
+    }
   });
   return viewPaper(
     ledger,
@@ -604,6 +736,11 @@ export async function setPaperMode(mode: PaperMode): Promise<Paper> {
     },
     kind,
   );
+}
+
+/** @deprecated use setPaperConfig */
+export async function setPaperMode(mode: PaperMode): Promise<Paper> {
+  return setPaperConfig({ mode });
 }
 
 export async function snapshotPaper(m?: MarketPx): Promise<Paper> {
@@ -625,11 +762,19 @@ export async function snapshotPaper(m?: MarketPx): Promise<Paper> {
   );
 }
 
-export function newLedger(now: number, mode: PaperMode = "taker"): Ledger {
-  return emptyLedger(now, mode);
+export function newLedger(
+  now: number,
+  mode: PaperMode = DEFAULT_PAPER_MODE,
+  horizonS: number = DEFAULT_PAPER_HORIZON_S,
+): Ledger {
+  return emptyLedger(now, mode, horizonS);
 }
 
-export function applyPaperStep(led: Ledger, m: MarketPx, signal: Signal): Ledger {
+export function applyPaperStep(
+  led: Ledger,
+  m: MarketPx,
+  signal: PaperSignals | Signal,
+): Ledger {
   step(led, m, signal);
   return led;
 }

@@ -34,6 +34,17 @@ export const FEATURES = [
   "trade_z_30",
 ] as const;
 
+/** Tête 60s : insiste sur 15s–2 min (ret/vol/CVD/imb), pas seulement 3–5s. */
+export const FEATURES_60 = [
+  ...FEATURES,
+  "ret_120",
+  "rv_120",
+  "tbr_60",
+  "imb_60",
+  "cvd_60",
+  "vol_z_120",
+] as const;
+
 export type FeatureName = (typeof FEATURES)[number] | string;
 
 const EPS = 1e-12;
@@ -98,13 +109,16 @@ export function computeFeatureMap(klines: Kline[]): Record<string, number> {
 
   const vol30 = sliceLast(vols, 30);
   const vol60 = sliceLast(vols, 60);
+  const vol120 = sliceLast(vols, 120);
   const tr30 = sliceLast(trades, 30);
   const s5 = sliceLast(signed, 5);
   const s15 = sliceLast(signed, 15);
   const s30 = sliceLast(signed, 30);
+  const s60 = sliceLast(signed, 60);
   const v5 = sliceLast(vols, 5);
   const v15 = sliceLast(vols, 15);
   const v30 = sliceLast(vols, 30);
+  const v60 = sliceLast(vols, 60);
   const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
   const map: Record<string, number> = {
@@ -114,14 +128,17 @@ export function computeFeatureMap(klines: Kline[]): Record<string, number> {
     ret_15: ret(15),
     ret_30: ret(30),
     ret_60: ret(60),
+    ret_120: n > 120 ? ret(120) : 0,
     rv_5: stdPop(rets1(5)),
     rv_15: stdPop(rets1(15)),
     rv_30: stdPop(rets1(30)),
     rv_60: stdPop(rets1(60)),
+    rv_120: n > 120 ? stdPop(rets1(120)) : stdPop(rets1(60)),
     tbr: tbrOf(last),
     tbr_5: mean(sliceLast(tbrs, 5)),
     tbr_15: mean(sliceLast(tbrs, 15)),
     tbr_30: mean(sliceLast(tbrs, 30)),
+    tbr_60: mean(sliceLast(tbrs, 60)),
     body_ratio: body / rng,
     upper_wick: upper / rng,
     lower_wick: lower / rng,
@@ -129,14 +146,17 @@ export function computeFeatureMap(klines: Kline[]): Record<string, number> {
     close_loc: (c - l) / rng,
     vol_z_30: (last.v - mean(vol30)) / Math.max(stdPop(vol30), EPS),
     vol_z_60: (last.v - mean(vol60)) / Math.max(stdPop(vol60), EPS),
+    vol_z_120: (last.v - mean(vol120)) / Math.max(stdPop(vol120), EPS),
     log_vol: Math.log(last.v + EPS),
     vol_shock_5: last.v / Math.max(mean(v5), EPS),
     imb_5: sum(s5) / Math.max(sum(v5), EPS),
     imb_15: sum(s15) / Math.max(sum(v15), EPS),
     imb_30: sum(s30) / Math.max(sum(v30), EPS),
+    imb_60: sum(s60) / Math.max(sum(v60), EPS),
     cvd_5: sum(s5),
     cvd_15: sum(s15),
     cvd_30: sum(s30),
+    cvd_60: sum(s60),
     trade_z_30: (last.n - mean(tr30)) / Math.max(stdPop(tr30), EPS),
   };
 
@@ -192,14 +212,17 @@ export const FEATURE_LABELS_FR: Record<string, string> = {
   ret_15: "rendement 15s",
   ret_30: "rendement 30s",
   ret_60: "rendement 60s",
+  ret_120: "rendement 120s",
   rv_5: "vol. réalisée 5s",
   rv_15: "vol. réalisée 15s",
   rv_30: "vol. réalisée 30s",
   rv_60: "vol. réalisée 60s",
+  rv_120: "vol. réalisée 120s",
   tbr: "taker buy",
   tbr_5: "taker buy 5s",
   tbr_15: "taker buy 15s",
   tbr_30: "taker buy 30s",
+  tbr_60: "taker buy 60s",
   body_ratio: "corps / range",
   upper_wick: "mèche haute",
   lower_wick: "mèche basse",
@@ -207,14 +230,17 @@ export const FEATURE_LABELS_FR: Record<string, string> = {
   close_loc: "position close",
   vol_z_30: "choc volume 30s",
   vol_z_60: "choc volume 60s",
+  vol_z_120: "choc volume 120s",
   log_vol: "log volume",
   vol_shock_5: "choc volume 5s",
   imb_5: "déséquilibre 5s",
   imb_15: "déséquilibre 15s",
   imb_30: "déséquilibre 30s",
+  imb_60: "déséquilibre 60s",
   cvd_5: "CVD 5s",
   cvd_15: "CVD 15s",
   cvd_30: "CVD 30s",
+  cvd_60: "CVD 60s",
   trade_z_30: "choc trades 30s",
   obi_10: "OBI carnet",
 };

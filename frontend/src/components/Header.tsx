@@ -31,7 +31,7 @@ export function Header({
         <Shield />
         <div>
           <div className="text-[15px] font-semibold tracking-[0.22em] text-white">FANAL</div>
-          <div className="text-[11px] tracking-wide text-muted">prédiction 5s · BTC-USD · Coinbase</div>
+          <div className="text-[11px] tracking-wide text-muted">prédiction 5s · paper faiseur 60s · BTC-USD · Coinbase</div>
         </div>
       </div>
       <div className="flex items-baseline justify-center gap-3">

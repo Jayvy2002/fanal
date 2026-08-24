@@ -21,6 +21,11 @@ export function WhyStrip({ live }: { live: LiveResponse }) {
         )}
       </div>
       <div className="mt-2 text-[11px] text-muted">{live.signal.why}</div>
+      {live.paper_signal && (
+        <div className="mt-1 text-[11px] text-gold/80">
+          Paper {live.paper_signal.horizon_s}s : {live.paper_signal.why}
+        </div>
+      )}
     </section>
   );
 }

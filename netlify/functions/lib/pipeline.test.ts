@@ -3,9 +3,20 @@
  * Run: node --experimental-strip-types --no-warnings netlify/functions/lib/pipeline.test.ts
  */
 import { completedKlines } from "./bars";
-import { expectedAbsMoveBps, type Calib } from "./forecasts";
+import { conservativeAbsMove60Bps, expectedAbsMoveBps, type Calib } from "./forecasts";
 import { applyPaperStep, makerFill, newLedger, type MarketPx } from "./paper";
-import { CLIP_USD, HORIZON_MS, TAKER_FEE_BPS } from "./paperFees";
+import {
+  CLIP_USD,
+  DEFAULT_PAPER_HORIZON_S,
+  DEFAULT_PAPER_MODE,
+  EXCHANGE_FEE,
+  LEDGER_VERSION,
+  MAKER_FEE_BPS,
+  TAKER_FEE_BPS,
+  makerRoundTripBps,
+  paperGateBps,
+  takerRoundTripBps,
+} from "./paperFees";
 import type { Signal } from "./types";
 import { adaptLiveFeatures, BINANCE_VS_COINBASE_VOL_RATIO, LOG_VOL_OFFSET } from "./venue";
 
@@ -41,7 +52,18 @@ function sig(over: Partial<Signal> = {}): Signal {
   };
 }
 
+function sig60(over: Partial<Signal> = {}): Signal {
+  return sig({
+    horizon_s: 60,
+    expected_move_bps: 130,
+    min_move_bps: 120,
+    ...over,
+  });
+}
+
 const T0 = 1_700_000_000_000;
+const H5 = 5_000;
+const H60 = 60_000;
 
 function mkt(over: Partial<MarketPx> = {}): MarketPx {
   return {
@@ -124,15 +146,15 @@ function mkt(over: Partial<MarketPx> = {}): MarketPx {
   assert(!makerFill("buy", 100, leak, 10_000), "bar that started before the order is not lookahead");
 }
 
-/* 5. Taker round-trip on a flat market loses fees (and spread) — not mid fills. */
+/* 5. Taker 5s round-trip on a flat market loses Advanced Trade intro fees. */
 {
-  const led = newLedger(0);
+  const led = newLedger(0, "taker", 5);
   const entry = mkt({ now: T0, exch_now: T0 });
   applyPaperStep(led, entry, sig());
   assert(led.open != null && led.open.entry_px === 100.1, "taker long fills at ask, not mid");
   applyPaperStep(
     led,
-    mkt({ now: T0 + HORIZON_MS + 1, exch_now: T0 + HORIZON_MS + 1 }),
+    mkt({ now: T0 + H5 + 1, exch_now: T0 + H5 + 1 }),
     sig({ gated: false, side: "flat", label: "NEUTRE" }),
   );
   assert(led.open == null && led.n === 1, "flatten at 5s, one closed trade");
@@ -140,18 +162,19 @@ function mkt(over: Partial<MarketPx> = {}): MarketPx {
   assert(t.exit_px === 99.9, "taker exit at bid, not mid");
   const fees = t.entry_fee_usd + t.exit_fee_usd;
   const expectFee = (CLIP_USD * TAKER_FEE_BPS) / 1e4 + (99.9 * (CLIP_USD / 100.1) * TAKER_FEE_BPS) / 1e4;
-  assert(almost(fees, expectFee, 1e-6), "both legs charged taker fee, no double-count in fee fields");
+  assert(almost(fees, expectFee, 1e-6), "both legs charged taker fee 120bp (Advanced Trade intro hyp.)");
   assert(t.pnl_usd < 0, "flat-to-down spread+fees is a loss (not hidden)");
   assert(t.hit === false, "hit is direction without fees");
+  assert(t.pnl_usd < 0 && led.hits_after_fees === 0, "hit after fees is PnL $ > 0, not direction");
 }
 
 /* 6. Same snapshot cannot flatten and open another position. */
 {
-  const led = newLedger(0);
+  const led = newLedger(0, "taker", 5);
   applyPaperStep(led, mkt({ now: T0 }), sig());
   applyPaperStep(
     led,
-    mkt({ now: T0 + HORIZON_MS + 1 }),
+    mkt({ now: T0 + H5 + 1 }),
     sig({ expected_move_bps: 2 }),
   );
   assert(led.open == null && led.pending == null, "no re-entry on the flatten snapshot");
@@ -160,16 +183,16 @@ function mkt(over: Partial<MarketPx> = {}): MarketPx {
 
 /* 7. 15s signal never opens the 5s paper book. */
 {
-  const led = newLedger(0);
+  const led = newLedger(0, "taker", 5);
   applyPaperStep(led, mkt({ now: T0 + 2_000 }), sig({ horizon_s: 15, expected_move_bps: 3 }));
   assert(led.open == null && led.pending == null && led.n === 0, "15s path is not the paper horizon");
 }
 
-/* 8. |move| < 1bp does not enter even if gated flag were stale. */
+/* 8. |move| < 1bp does not enter 5s even if gated flag were stale. */
 {
-  const led = newLedger(0);
+  const led = newLedger(0, "taker", 5);
   applyPaperStep(led, mkt({ now: T0 + 3_000 }), sig({ expected_move_bps: 0.4, gated: true }));
-  assert(led.open == null, "paper min 1bp matches live gate");
+  assert(led.open == null, "paper min 1bp matches live gate on 5s opt-in");
 }
 
 /* 9. Venue adapter only rescales log_vol / cvd for Binance trees. */
@@ -181,6 +204,89 @@ function mkt(over: Partial<MarketPx> = {}): MarketPx {
   assert(almost(binance.log_vol, raw.log_vol + LOG_VOL_OFFSET), "log_vol shifted toward Binance volume");
   assert(almost(binance.cvd_5, raw.cvd_5 * BINANCE_VS_COINBASE_VOL_RATIO), "cvd scaled");
   assert(coinbase.log_vol === raw.log_vol, "Coinbase-trained trees get raw Coinbase vectors");
+}
+
+/* 10. Default paper = maker 60s, schema v2, gate = maker RT. */
+{
+  const led = newLedger(0);
+  assert(led.v === LEDGER_VERSION, "ledger schema v2");
+  assert(led.mode === DEFAULT_PAPER_MODE && led.mode === "maker", "default mode maker");
+  assert(led.horizon_s === DEFAULT_PAPER_HORIZON_S && led.horizon_s === 60, "default horizon 60s");
+  assert(led.cash_usd === 1000, "fresh cash 1000");
+  assert(paperGateBps(60) === makerRoundTripBps(), "60s gate is maker round-trip");
+  assert(paperGateBps(60) === 120, "maker RT default 120bp");
+  assert(paperGateBps(5) === 1, "5s opt-in keeps 1bp gate");
+}
+
+/* 11. Fee constants: Advanced Trade intro hyp. 120/60, Exchange 60/40 unused. */
+{
+  assert(TAKER_FEE_BPS === 120 && MAKER_FEE_BPS === 60, "intro-tier hyp. 120/60, not Exchange 60/40");
+  assert(makerRoundTripBps() === 120 && takerRoundTripBps() === 240, "RT maker 120 / taker 240");
+  assert(EXCHANGE_FEE.taker_bps === 60 && EXCHANGE_FEE.maker_bps === 40, "Exchange 60/40 kept as named alternate");
+}
+
+/* 12. 5s display signal never opens the 60s paper. */
+{
+  const led = newLedger(0, "maker", 60);
+  applyPaperStep(led, mkt({ now: T0 }), sig({ expected_move_bps: 200, gated: true, horizon_s: 5 }));
+  assert(led.open == null && led.pending == null, "paper must not enter on the 5s head");
+}
+
+/* 13. |move| under maker RT does not enter 60s paper. */
+{
+  const led = newLedger(0, "maker", 60);
+  applyPaperStep(led, mkt({ now: T0 }), sig60({ expected_move_bps: 40, gated: true }));
+  assert(led.open == null && led.pending == null, "40bp < 120bp maker RT → no take");
+}
+
+/* 14. Maker 60s posts at bid, fills on later trade-through, flattens from placement clock. */
+{
+  const led = newLedger(0, "maker", 60);
+  applyPaperStep(led, mkt({ now: T0, bid: 99.9, ask: 100.1 }), sig60());
+  assert(led.pending?.kind === "entry" && led.pending.limit_px === 99.9, "maker buy posts at bid");
+  assert(led.pending.expire_ts === T0 + H60, "expire = placement + 60s");
+  applyPaperStep(
+    led,
+    mkt({
+      now: T0 + 2_000,
+      exch_now: T0 + 2_000,
+      bid: 99.9,
+      ask: 100.1,
+      bars: [{ t: T0 + 1_000, h: 100, l: 99.8 }],
+    }),
+    sig60({ gated: false, side: "flat", label: "NEUTRE" }),
+  );
+  assert(led.open != null && led.open.entry_px === 99.9, "strict trade-through fills at posted bid");
+  assert(led.open.flatten_ts === T0 + H60, "flatten clock is placement+60s, not fill+60s");
+  applyPaperStep(
+    led,
+    mkt({ now: T0 + H60 + 1, exch_now: T0 + H60 + 1, bid: 99.9, ask: 100.1 }),
+    sig60({ gated: false, side: "flat", label: "NEUTRE" }),
+  );
+  assert(led.open == null && led.n === 1, "unfilled maker exit flattens taker at horizon");
+  const t = led.recent[0];
+  assert(t.entry_role === "maker" && t.exit_role === "taker", "exit taker if maker exit misses");
+  assert(t.pnl_usd < 0, "fees on both legs, honest loss on flat");
+}
+
+/* 15. Unfilled maker entry cancels at +60s, no position. */
+{
+  const led = newLedger(0, "maker", 60);
+  applyPaperStep(led, mkt({ now: T0 }), sig60());
+  applyPaperStep(
+    led,
+    mkt({ now: T0 + H60 + 1, bars: [{ t: T0 + 1_000, h: 100.05, l: 99.95 }] }),
+    sig60(),
+  );
+  assert(led.pending == null && led.open == null, "cancel if not trade-through by +60s");
+  assert(led.n_cancelled === 1 && led.n === 0, "cancel is not a closed round-trip");
+}
+
+/* 16. Conservative 60s |move| from ~10bp vol stays under 120bp gate. */
+{
+  const rv = 10 / (Math.sqrt(60) * 1e4);
+  const e = conservativeAbsMove60Bps(0.7, { rv_15: rv, rv_30: rv, rv_60: rv });
+  assert(e < 120, `typical 60s vol ~10bp does not clear 120bp gate (e=${e})`);
 }
 
 if (failed) {

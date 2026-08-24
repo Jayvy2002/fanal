@@ -74,6 +74,8 @@ export type PaperRow = {
   exit_role?: "taker" | "maker" | "cancel";
   status?: "open" | "pending_entry" | "closed" | "cancelled";
   id?: string;
+  posted_px?: number;
+  age_s?: number;
 };
 
 export type PaperMode = "taker" | "maker";
@@ -81,7 +83,9 @@ export type PaperMode = "taker" | "maker";
 export type Paper = {
   n: number;
   hits: number;
+  hits_after_fees?: number;
   hit_rate: number | null;
+  hit_rate_after_fees?: number | null;
   pending: PaperRow | null;
   remaining_s: number;
   recent: PaperRow[];
@@ -96,10 +100,25 @@ export type Paper = {
   clip_usd?: number;
   min_move_bps?: number;
   n_cancelled?: number;
+  n_maker_fills?: number;
+  n_taker_fills?: number;
+  fee_product?: string;
   fee_tier?: string;
   taker_fee_bps?: number;
   maker_fee_bps?: number;
   round_trip_fee_bps?: number;
+  round_trip_maker_bps?: number;
+  round_trip_taker_bps?: number;
+  fee_caveat?: string;
+  fee_verified_vs_official?: boolean;
+  official_advanced_url?: string;
+  official_exchange_url?: string;
+  exchange_alternate?: {
+    product: string;
+    taker_bps: number;
+    maker_bps: number;
+    used: boolean;
+  };
   persisted?: boolean;
   store?: "blobs" | "file";
   started_ts?: number;
@@ -110,12 +129,15 @@ export type Paper = {
     qty: number;
     entry_px: number;
     role: "taker" | "maker";
+    posted_px?: number;
+    age_s?: number;
   } | null;
   honest?: string;
 };
 
 export type LiveResponse = {
   signal: Signal;
+  paper_signal?: Signal;
   flux: Signal & { ret_5_bps: number | null; rv_60: number | null };
   book: Book;
   spark: SparkPoint[];
@@ -125,6 +147,7 @@ export type LiveResponse = {
   error: string | null;
   kind: string;
   horizon_s: number;
+  paper_horizon_s?: number;
   bar_s: number;
   tau: number;
   min_move_bps?: number;
@@ -139,6 +162,17 @@ export type LiveResponse = {
     mean_abs_move_bps?: number | null;
     expectancy_1bp?: number | null;
     expectancy_2bp?: number | null;
+  };
+  test_60?: {
+    gated_acc: number | null;
+    n: number;
+    coverage: number;
+    naive_last_acc: number;
+    mean_abs_move_bps?: number | null;
+    expectancy_maker_rt?: number | null;
+    expectancy_taker_rt?: number | null;
+    fallback?: boolean;
+    note?: string;
   };
   swapped_live?: boolean | null;
   coinbase_train?: {
@@ -204,7 +238,9 @@ export function fmtClock(ts: number): string {
 
 export function fmtCd(s: number): string {
   const x = Math.max(0, Math.round(s));
-  return `0:${String(x).padStart(2, "0")}`;
+  const m = Math.floor(x / 60);
+  const sec = x % 60;
+  return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
 export function signalColor(label: Signal["label"]): string {

@@ -3,9 +3,16 @@ import { bookFromDepth } from "./book";
 import { COINBASE_PRODUCT, fetchBook, fetchStats, fetchTicker, parseTradeTime } from "./coinbase";
 import { computeFeatureMap, retBps, rvWindow, sparkFrom, vectorFromMap, whyStrip } from "./features";
 import { expectedAbsMoveBps, expectedMoveBps, updateForecasts } from "./forecasts";
-import { paperStoreKind, snapshotPaper, stepPaper, setPaperMode, type MarketPx } from "./paper";
-import type { PaperMode } from "./paperFees";
-import { getMeta, getMeta15, is15Enabled, predictPUp, predictPUp15, verifySanity } from "./scorer";
+import {
+  paperStoreKind,
+  snapshotPaper,
+  stepPaper,
+  setPaperConfig,
+  type MarketPx,
+} from "./paper";
+import { DEFAULT_PAPER_HORIZON_S, isPaperHorizon, type PaperMode } from "./paperFees";
+import { getMeta, getMeta15, getMeta60, is15Enabled, predictPUp, predictPUp15, verifySanity } from "./scorer";
+import { buildSignal60, emptySignal60 } from "./signal60";
 import type { HealthResponse, LiveResponse, Signal, SparkPoint, TickerResponse } from "./types";
 import { adaptLiveFeatures } from "./venue";
 
@@ -165,6 +172,11 @@ export async function buildLive(): Promise<LiveResponse> {
     }
 
     const lastBar = klines[klines.length - 1];
+    let signal60 = emptySignal60(mid, "amorçage Coinbase — reconstruction des barres 1s (barre courante exclue)");
+    if (featBars.length >= 61) {
+      const built = buildSignal60(rawMap, signal.p_up, mid);
+      signal60 = built.signal;
+    }
     const market: MarketPx = {
       now: wall,
       exch_now: exchNow,
@@ -174,17 +186,32 @@ export async function buildLive(): Promise<LiveResponse> {
       last,
       low: lastBar?.l ?? last,
       high: lastBar?.h ?? last,
-      bars: klines.slice(-16).map((k) => ({ t: k.t, h: k.h, l: k.l })),
+      /* 60s trade-through : assez de barres 1s (cron 1 min + horizon). */
+      bars: klines.slice(-180).map((k) => ({ t: k.t, h: k.h, l: k.l })),
     };
-    const paper = await stepPaper(market, signal);
+    const paper = await stepPaper(market, { five: signal, sixty: signal60 });
     const forecasts = updateForecasts({ now: exchNow, mid, signal5: signal, signal15 });
     const spark = markSpark(sparkFrom(klines, 300), forecasts);
     const ret5 = retBps(featBars.length ? featBars : klines, 5);
     const rv60 = rvWindow(featBars.length ? featBars : klines, 60);
     const why = whyStrip(rawMap, meta.importance, [{ key: "obi_10", value: book.obi_10 }]);
+    const meta60 = getMeta60();
+
+    const t60raw = meta60.test as typeof meta60.test & {
+      ungated_tau_only?: {
+        gated_acc?: number | null;
+        n?: number;
+        coverage?: number;
+        mean_abs_move_bps?: number | null;
+        expectancy_maker_rt?: number | null;
+        expectancy_taker_rt?: number | null;
+      };
+    };
+    const ungated60 = t60raw.ungated_tau_only;
 
     return {
       signal,
+      paper_signal: signal60,
       flux: { ...signal, ret_5_bps: ret5, rv_60: rv60 },
       book,
       spark,
@@ -194,6 +221,7 @@ export async function buildLive(): Promise<LiveResponse> {
       error,
       kind: "lgbm",
       horizon_s: 5,
+      paper_horizon_s: paper.horizon_s ?? DEFAULT_PAPER_HORIZON_S,
       bar_s: 1,
       tau,
       min_move_bps: minMove,
@@ -201,6 +229,19 @@ export async function buildLive(): Promise<LiveResponse> {
       venue: "coinbase",
       product: "BTC-USD",
       test,
+      test_60: {
+        gated_acc: t60raw.gated_acc ?? null,
+        n: t60raw.n ?? 0,
+        coverage: t60raw.coverage ?? 0,
+        naive_last_acc: t60raw.naive_last_acc ?? 0,
+        mean_abs_move_bps: t60raw.mean_abs_move_bps ?? ungated60?.mean_abs_move_bps ?? null,
+        expectancy_1bp: t60raw.expectancy_1bp ?? null,
+        expectancy_2bp: t60raw.expectancy_2bp ?? null,
+        expectancy_maker_rt: t60raw.expectancy_maker_rt ?? ungated60?.expectancy_maker_rt ?? null,
+        expectancy_taker_rt: t60raw.expectancy_taker_rt ?? ungated60?.expectancy_taker_rt ?? null,
+        fallback: meta60.fallback === true,
+        note: meta60.honest ?? meta60.note,
+      },
       swapped_live: meta.swapped_live ?? null,
       coinbase_train: meta.coinbase_train,
     };
@@ -211,6 +252,7 @@ export async function buildLive(): Promise<LiveResponse> {
     const paper = await snapshotPaper();
     return {
       signal,
+      paper_signal: emptySignal60(close, error),
       flux: { ...signal, ret_5_bps: null, rv_60: null },
       book: emptyBook(),
       spark: [],
@@ -220,6 +262,7 @@ export async function buildLive(): Promise<LiveResponse> {
       error,
       kind: "lgbm",
       horizon_s: 5,
+      paper_horizon_s: paper.horizon_s ?? DEFAULT_PAPER_HORIZON_S,
       bar_s: 1,
       tau,
       min_move_bps: minMove,
@@ -283,17 +326,30 @@ export async function handlePaper(
   if (method === "OPTIONS") return { status: 204, body: "" };
   if (method === "GET") return { status: 200, body: await snapshotPaper() };
   if (method === "POST") {
-    let parsed: { mode?: string } = {};
+    let parsed: { mode?: string; horizonSec?: number } = {};
     try {
-      parsed = req?.body ? (JSON.parse(req.body) as { mode?: string }) : {};
+      parsed = req?.body ? (JSON.parse(req.body) as { mode?: string; horizonSec?: number }) : {};
     } catch {
       return { status: 400, body: { error: "json_invalide" } };
     }
     const mode = parsed.mode as PaperMode | undefined;
-    if (mode !== "taker" && mode !== "maker") {
+    const horizonSec = parsed.horizonSec;
+    if (mode != null && mode !== "taker" && mode !== "maker") {
       return { status: 400, body: { error: "mode_invalide", hint: "taker | maker" } };
     }
-    return { status: 200, body: await setPaperMode(mode) };
+    if (horizonSec != null && !isPaperHorizon(Number(horizonSec))) {
+      return { status: 400, body: { error: "horizon_invalide", hint: "5 | 60" } };
+    }
+    if (mode == null && horizonSec == null) {
+      return { status: 400, body: { error: "mode_invalide", hint: "taker | maker, horizonSec 5 | 60" } };
+    }
+    return {
+      status: 200,
+      body: await setPaperConfig({
+        mode,
+        horizonSec: horizonSec != null ? Number(horizonSec) : undefined,
+      }),
+    };
   }
   return { status: 405, body: { error: "methode" } };
 }

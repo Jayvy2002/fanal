@@ -78,9 +78,9 @@ export default function App() {
       <footer className="border-t border-line px-5 py-4 text-[11px] leading-relaxed text-muted">
         Jouet de recherche, pas un conseil financier. Prix live publics Coinbase Exchange (BTC-USD :
         ticker, carnet, trades). Features = dernière barre 1s <strong>complète</strong> (pas la seconde
-        en cours). Feu seulement si |move| prévu ≥ 1 bp (même formule qu’à l’entraînement). Paper 24 h
-        persisté (Netlify Blobs) + cron 1 min <code>paper-tick</code> : un onglet en arrière-plan ne
-        fige plus le flatten. Aucun ordre Coinbase réel.
+        en cours). Feu 5s du graphique si |move| ≥ 1 bp — le paper n’entre pas là-dessus. Paper défaut =
+        faiseur 60s, gate = aller-retour faiseur (hypothèse Advanced Trade intro 60 bp × 2 = 120 bp),
+        persisté (Netlify Blobs) + cron 1 min <code>paper-tick</code>. Aucun ordre Coinbase réel.
         {live?.test?.gated_acc != null && (
           <>
             {" "}

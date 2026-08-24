@@ -2,6 +2,8 @@ import lgbmJson from "../_models/fanal_sec_lgbm.json";
 import metaJson from "../_models/fanal_sec_meta.json";
 import lgbm15Json from "../_models/fanal_sec_lgbm_15.json";
 import meta15Json from "../_models/fanal_sec_meta_15.json";
+import lgbm60Json from "../_models/fanal_sec_lgbm_60.json";
+import meta60Json from "../_models/fanal_sec_meta_60.json";
 
 type Leaf = { v: number };
 type Split = {
@@ -52,6 +54,8 @@ export type ModelMeta = {
     mean_abs_move_bps?: number | null;
     expectancy_1bp?: number | null;
     expectancy_2bp?: number | null;
+    expectancy_maker_rt?: number | null;
+    expectancy_taker_rt?: number | null;
   };
   sanity: { x: number[]; p: number; raw: number }[];
   calib?: Calib;
@@ -60,6 +64,9 @@ export type ModelMeta = {
   swap_reason?: string;
   train_archive?: string;
   live_venue?: string;
+  fallback?: boolean;
+  honest?: string;
+  note?: string;
   coinbase_train?: {
     n_days?: number;
     tau?: number;
@@ -73,6 +80,8 @@ const model = lgbmJson as CompactModel;
 const meta = metaJson as ModelMeta;
 const model15 = lgbm15Json as CompactModel;
 const meta15 = meta15Json as ModelMeta;
+const model60 = lgbm60Json as CompactModel;
+const meta60 = meta60Json as ModelMeta;
 
 function isLeaf(n: Node): n is Leaf {
   return "v" in n;
@@ -126,8 +135,21 @@ export function getMeta15(): ModelMeta {
   return meta15;
 }
 
+export function getMeta60(): ModelMeta {
+  return meta60;
+}
+
 export function is15Enabled(): boolean {
   return meta15?.enabled === true;
+}
+
+export function has60Model(): boolean {
+  return (model60?.trees?.length ?? 0) > 0;
+}
+
+export function predictPUp60(x: number[]): number {
+  if (!has60Model()) return 0.5;
+  return sigmoid(rawScoreOf(model60, x));
 }
 
 export function verifySanity(eps = 1e-5): void {
