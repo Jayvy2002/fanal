@@ -47,6 +47,7 @@ export default function App() {
       <Header
         ticker={ticker}
         tau={live?.tau ?? 0.58}
+        minMoveBps={live?.min_move_bps ?? live?.signal.min_move_bps ?? 1}
         fallbackPrice={live?.signal.close ?? 0}
       />
       <main className="grid gap-4 p-4 lg:grid-cols-[1fr_300px]">
@@ -73,15 +74,20 @@ export default function App() {
       </main>
       <footer className="border-t border-line px-5 py-4 text-[11px] leading-relaxed text-muted">
         Jouet de recherche, pas un conseil financier. Prix live publics Coinbase Exchange (BTC-USD :
-        ticker, carnet, trades). Le modèle 5s a été entraîné hors-ligne sur des archives 1s Binance
-        Vision (features relatives, sans fuite). Le paper trading est en mémoire par instance Netlify —
-        un redémarrage à froid remet le compteur à zéro.
+        ticker, carnet, trades). Le modèle 5s est entraîné hors-ligne sur des barres 1s Coinbase
+        (trades publics, features relatives, sans fuite). Feu seulement si |move| prévu ≥ 1 bp.
+        Le paper trading est en mémoire par instance Netlify — un redémarrage à froid remet le
+        compteur à zéro.
         {live?.test?.gated_acc != null && (
           <>
             {" "}
             Test OOS : {(live.test.gated_acc * 100).toFixed(1).replace(".", ",")} % gated vs naive{" "}
             {(live.test.naive_last_acc * 100).toFixed(1).replace(".", ",")} % (couverture{" "}
-            {(live.test.coverage * 100).toFixed(0).replace(".", ",")} %).
+            {(live.test.coverage * 100).toFixed(0).replace(".", ",")} %
+            {live.test.expectancy_1bp != null
+              ? `, E après 1 bp ${live.test.expectancy_1bp.toFixed(2).replace(".", ",")} bp`
+              : ""}
+            ).
           </>
         )}
       </footer>

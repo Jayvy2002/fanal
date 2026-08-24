@@ -2,7 +2,7 @@ import { snapshotLive } from "./bars";
 import { bookFromDepth } from "./book";
 import { COINBASE_PRODUCT, fetchBook, fetchStats, fetchTicker, parseTradeTime } from "./coinbase";
 import { computeFeatureMap, retBps, rvWindow, sparkFrom, vectorFromMap, whyStrip } from "./features";
-import { expectedMoveBps, updateForecasts } from "./forecasts";
+import { expectedAbsMoveBps, expectedMoveBps, updateForecasts } from "./forecasts";
 import { updatePaper } from "./paper";
 import { getMeta, getMeta15, is15Enabled, predictPUp, predictPUp15, verifySanity } from "./scorer";
 import type { HealthResponse, LiveResponse, Signal, SparkPoint, TickerResponse } from "./types";
@@ -25,30 +25,38 @@ function makeSignal(
   horizonS: number,
   tau: number,
   calib: ReturnType<typeof getMeta>["calib"],
-  meanAbsMove?: number | null,
+  minMoveBps: number,
+  map?: Record<string, number>,
 ): Signal {
+  const absMove = expectedAbsMoveBps(pUp, calib, map);
+  const move = expectedMoveBps(pUp, calib, map);
+  const probUp = pUp >= tau;
+  const probDown = pUp <= 1 - tau;
+  const probGated = probUp || probDown;
+  const moveGated = absMove >= minMoveBps;
   let label: Signal["label"] = "NEUTRE";
   let side: Signal["side"] = "flat";
   let gated = false;
+  let gate_block: Signal["gate_block"] = null;
   let why: string;
-  if (pUp >= tau) {
+  if (!probGated) {
+    gate_block = "prob";
+    why = `P(↑) entre 1−τ ${fmtP(1 - tau)} et τ ${fmtP(tau)} — pas de signal`;
+  } else if (!moveGated) {
+    gate_block = "move";
+    why = `|move| prévu ${fmtP(absMove)} bp < ${fmtP(minMoveBps)} bp — NEUTRE (coût ~1 bp)`;
+  } else if (probUp) {
     label = "HAUSSIER";
     side = "up";
     gated = true;
-    why = `P(↑) ${fmtP(pUp)} ≥ τ ${fmtP(tau)}`;
-  } else if (pUp <= 1 - tau) {
+    why = `P(↑) ${fmtP(pUp)} ≥ τ ${fmtP(tau)} et |move| ${fmtP(absMove)} ≥ ${fmtP(minMoveBps)} bp`;
+  } else {
     label = "BAISSIER";
     side = "down";
     gated = true;
-    why = `P(↑) ${fmtP(pUp)} ≤ 1−τ ${fmtP(1 - tau)}`;
-  } else {
-    why = `P(↑) entre 1−τ ${fmtP(1 - tau)} et τ ${fmtP(tau)} — pas de signal`;
+    why = `P(↑) ${fmtP(pUp)} ≤ 1−τ ${fmtP(1 - tau)} et |move| ${fmtP(absMove)} ≥ ${fmtP(minMoveBps)} bp`;
   }
   const confidence = side === "down" ? 1 - pUp : side === "up" ? pUp : Math.max(pUp, 1 - pUp);
-  const move = expectedMoveBps(pUp, {
-    ...calib,
-    mean_abs_bps: meanAbsMove ?? calib?.mean_abs_bps ?? 1,
-  });
   const target_px = close * (1 + move / 1e4);
   return {
     side,
@@ -62,6 +70,8 @@ function makeSignal(
     tau,
     expected_move_bps: move,
     target_px,
+    min_move_bps: minMoveBps,
+    gate_block,
   };
 }
 
@@ -109,8 +119,13 @@ export async function buildLive(): Promise<LiveResponse> {
   ensureSanity();
   const meta = getMeta();
   const tau = meta.tau;
+  const minMove = meta.min_move_bps ?? meta.calib?.min_move_bps ?? 1.0;
   const test = meta.test;
   let error: string | null = null;
+  const calib = {
+    ...meta.calib,
+    mean_abs_bps: meta.test?.mean_abs_move_bps ?? meta.calib?.mean_abs_bps ?? 1,
+  };
 
   try {
     const snap = await snapshotLive();
@@ -127,9 +142,9 @@ export async function buildLive(): Promise<LiveResponse> {
       const names = meta.features?.length ? meta.features : Object.keys(map);
       const x = vectorFromMap(map, names);
       const pUp = predictPUp(x);
-      signal = makeSignal(pUp, close, 5, tau, meta.calib, meta.test?.mean_abs_move_bps);
+      signal = makeSignal(pUp, close, 5, tau, calib, minMove, map);
     } else {
-      signal = makeSignal(0.5, close, 5, tau, meta.calib);
+      signal = makeSignal(0.5, close, 5, tau, calib, minMove);
       signal.why = "amorçage Coinbase — reconstruction des barres 1s";
       signal.gated = false;
       signal.side = "flat";
@@ -142,7 +157,12 @@ export async function buildLive(): Promise<LiveResponse> {
       const names15 = meta15.features?.length ? meta15.features : meta.features;
       const x15 = vectorFromMap(map, names15);
       const p15 = predictPUp15(x15);
-      signal15 = makeSignal(p15, close, 15, meta15.tau || tau, meta15.calib, meta15.test?.mean_abs_move_bps);
+      const min15 = meta15.min_move_bps ?? meta15.calib?.min_move_bps ?? minMove;
+      const calib15 = {
+        ...meta15.calib,
+        mean_abs_bps: meta15.test?.mean_abs_move_bps ?? meta15.calib?.mean_abs_bps ?? 1,
+      };
+      signal15 = makeSignal(p15, close, 15, meta15.tau || tau, calib15, min15, map);
     }
 
     const mid = book.mid || close;
@@ -166,6 +186,7 @@ export async function buildLive(): Promise<LiveResponse> {
       horizon_s: 5,
       bar_s: 1,
       tau,
+      min_move_bps: minMove,
       now,
       venue: "coinbase",
       product: "BTC-USD",
@@ -174,7 +195,7 @@ export async function buildLive(): Promise<LiveResponse> {
   } catch (err) {
     error = err instanceof Error ? err.message : "live_error";
     const close = 0;
-    const signal = makeSignal(0.5, close, 5, tau, meta.calib);
+    const signal = makeSignal(0.5, close, 5, tau, calib, minMove);
     const paper = updatePaper(Date.now(), 0, { ...signal, gated: false, side: "flat", label: "NEUTRE" });
     return {
       signal,
@@ -189,6 +210,7 @@ export async function buildLive(): Promise<LiveResponse> {
       horizon_s: 5,
       bar_s: 1,
       tau,
+      min_move_bps: minMove,
       now: Date.now(),
       venue: "coinbase",
       product: "BTC-USD",
@@ -228,6 +250,7 @@ export function buildHealth(): HealthResponse {
     horizon_s: 5,
     bar_s: 1,
     tau: meta.tau,
+    min_move_bps: meta.min_move_bps ?? meta.calib?.min_move_bps ?? 1.0,
     symbol: COINBASE_PRODUCT,
     venue: "coinbase",
     paper: "memory",

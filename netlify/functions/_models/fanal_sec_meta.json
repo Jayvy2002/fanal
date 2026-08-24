@@ -7,6 +7,7 @@
   "live_venue": "coinbase",
   "live_product": "BTC-USD",
   "tau": 0.58,
+  "min_move_bps": 1.0,
   "features": [
     "ret_1",
     "ret_3",

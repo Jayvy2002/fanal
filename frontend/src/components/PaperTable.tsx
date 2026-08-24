@@ -52,7 +52,7 @@ export function PaperTable({ live }: { live: LiveResponse }) {
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={5} className="py-6 text-sm text-muted">
-                  En attente d’un signal gated (hors bande NEUTRE).
+                  En attente d’un signal gated (P hors bande ET |move| prévu ≥ 1 bp).
                 </td>
               </tr>
             ) : (

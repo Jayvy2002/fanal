@@ -14,10 +14,12 @@ function Shield() {
 export function Header({
   ticker,
   tau,
+  minMoveBps,
   fallbackPrice,
 }: {
   ticker: TickerResponse | null;
   tau: number;
+  minMoveBps: number;
   fallbackPrice: number;
 }) {
   const last = ticker?.last || fallbackPrice;
@@ -42,9 +44,10 @@ export function Header({
       </div>
       <div className="flex justify-end">
         <div className="rounded-full border border-gold/50 px-3 py-1 font-mono text-[11px] tracking-wide text-gold">
-          LIGHTGBM · τ {nfPrice.format(tau)}
+          LIGHTGBM · τ {nfPrice.format(tau)} · ≥ {nfPrice.format(minMoveBps)} bp
         </div>
       </div>
     </header>
   );
 }
+

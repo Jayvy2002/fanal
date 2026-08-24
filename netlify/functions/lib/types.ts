@@ -12,6 +12,8 @@ export type Signal = {
   tau: number;
   expected_move_bps: number;
   target_px: number;
+  min_move_bps?: number;
+  gate_block?: "prob" | "move" | null;
 };
 
 export type WhyFeature = {
@@ -85,6 +87,7 @@ export type TestMeta = {
   naive_last_acc: number;
   mean_abs_move_bps?: number | null;
   expectancy_1bp?: number | null;
+  expectancy_2bp?: number | null;
 };
 
 export type LiveResponse = {
@@ -100,6 +103,7 @@ export type LiveResponse = {
   horizon_s: number;
   bar_s: number;
   tau: number;
+  min_move_bps: number;
   now: number;
   venue: "coinbase";
   product: "BTC-USD";
@@ -123,6 +127,7 @@ export type HealthResponse = {
   horizon_s: number;
   bar_s: number;
   tau: number;
+  min_move_bps?: number;
   symbol: string;
   venue: "coinbase";
   paper: "memory";

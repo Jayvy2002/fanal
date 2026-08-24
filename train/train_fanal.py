@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Train leak-free LightGBM 5s (+ optional 15s) BTC classifiers on Binance Vision 1s klines.
+"""Train leak-free LightGBM 5s (+ optional 15s) on Coinbase Exchange BTC-USD 1s bars.
 
-Archive data only. Live Fanal scores Coinbase BTC-USD reconstructed 1s bars with the same
-relative microstructure features (returns / flow / wicks) — no Binance live feed.
+1s bars are reconstructed from public REST trades (see fetch_coinbase.py). No API key.
+Live Fanal uses the same relative microstructure features on Coinbase 1s bars.
+Time-based split only. Gate = probability τ AND expected |move| ≥ ~1 bp, tuned on VAL
+to maximize expectancy after 1 bp cost (not gated-accuracy headlines).
 """
 
 from __future__ import annotations
@@ -11,38 +13,18 @@ import json
 import math
 import shutil
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
-from io import BytesIO
+from datetime import datetime, timezone
 from pathlib import Path
-from zipfile import ZipFile
 
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "data" / "klines"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fetch_coinbase import BARS_PATH, fetch_days
 MODELS = ROOT / "models"
 FN_MODELS = ROOT / "netlify" / "functions" / "_models"
-
-VISION = "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-{d}.zip"
-
-COLS = [
-    "open_time",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "close_time",
-    "quote_volume",
-    "count",
-    "taker_buy_base",
-    "taker_buy_quote",
-    "ignore",
-]
 
 FEATURES = [
     "ret_1",
@@ -77,70 +59,30 @@ FEATURES = [
     "trade_z_30",
 ]
 
-BASELINE_GATED = 0.6730947939156379
-BASELINE_COVERAGE = 0.7833833253054254
+# Current main (Binance Vision 1s, τ=0.58 only) — honest comparison target.
+PREV_MAIN = {
+    "gated_acc": 0.7025870427206409,
+    "n": 299106,
+    "coverage": 0.7494174655114527,
+    "naive_last_acc": 0.5108890102676401,
+    "mean_abs_move_bps": 1.0328544312011778,
+    "expectancy_1bp": -0.7816733953462245,
+    "expectancy_2bp": -1.7816733953462245,
+    "tau": 0.58,
+    "min_move_bps": 0.0,
+    "train_archive": "binance_vision_btcusdt_1s",
+}
+
+BASELINE_GATED = PREV_MAIN["gated_acc"]
+BASELINE_E1 = PREV_MAIN["expectancy_1bp"]
 HORIZON_5 = 5
 HORIZON_15 = 15
 WARMUP = 60
 COST_BPS = 1.0
-MIN_COVERAGE = 0.05
-
-
-def daterange(end: date, days: int) -> list[str]:
-    return [(end - timedelta(days=i)).isoformat() for i in range(days)][::-1]
-
-
-def _fetch_day(d: str) -> Path | None:
-    dest = DATA / f"BTCUSDT-1s-{d}.csv"
-    if dest.exists() and dest.stat().st_size > 1_000_000:
-        print(f"  cache {d}", flush=True)
-        return dest
-    url = VISION.format(d=d)
-    print(f"  fetch {d} …", flush=True)
-    req = urllib.request.Request(url, headers={"User-Agent": "FanalTrain/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=90) as r:
-            blob = r.read()
-    except Exception as exc:
-        print(f"  skip {d}: {exc}", flush=True)
-        return None
-    if len(blob) < 1000 or blob[:2] != b"PK":
-        print(f"  skip {d}: not a zip ({len(blob)} bytes)", flush=True)
-        return None
-    with ZipFile(BytesIO(blob)) as zf:
-        name = zf.namelist()[0]
-        dest.write_bytes(zf.read(name))
-    print(f"  wrote {dest.name} ({dest.stat().st_size:,} bytes)", flush=True)
-    return dest
-
-
-def download_days(days: list[str]) -> list[Path]:
-    DATA.mkdir(parents=True, exist_ok=True)
-    paths: list[Path] = []
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futs = {pool.submit(_fetch_day, d): d for d in days}
-        by_day: dict[str, Path] = {}
-        for fut in as_completed(futs):
-            p = fut.result()
-            if p is not None:
-                by_day[futs[fut]] = p
-    for d in days:
-        if d in by_day:
-            paths.append(by_day[d])
-    return paths
-
-
-def load_klines(paths: list[Path]) -> pd.DataFrame:
-    frames = []
-    for p in paths:
-        df = pd.read_csv(p, header=None, names=COLS)
-        frames.append(df)
-    df = pd.concat(frames, ignore_index=True)
-    df = df.sort_values("open_time").drop_duplicates("open_time", keep="last")
-    for c in ["open", "high", "low", "close", "volume", "taker_buy_base", "count"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df = df.dropna(subset=["close", "volume"]).reset_index(drop=True)
-    return df
+MIN_COVERAGE = 0.01
+PREF_COVERAGE = 0.05
+TARGET_MIN_MOVE = 1.0
+MAX_FILL_S = 30
 
 
 def rolling_std(x: np.ndarray, window: int) -> np.ndarray:
@@ -239,6 +181,45 @@ def fwd_bps(close: np.ndarray, horizon: int) -> np.ndarray:
     return out
 
 
+def densify_chunk(part: pd.DataFrame) -> pd.DataFrame:
+    part = part.copy()
+    part["sec"] = (part["open_time"].to_numpy(dtype=np.int64) // 1000).astype(np.int64)
+    part = part.drop_duplicates("sec", keep="last").set_index("sec").sort_index()
+    full = pd.RangeIndex(int(part.index.min()), int(part.index.max()) + 1, name="sec")
+    out = part.reindex(full)
+    out["close"] = out["close"].ffill()
+    miss = out["volume"].isna()
+    out.loc[miss, "open"] = out.loc[miss, "close"]
+    out.loc[miss, "high"] = out.loc[miss, "close"]
+    out.loc[miss, "low"] = out.loc[miss, "close"]
+    out.loc[miss, "volume"] = 0.0
+    out.loc[miss, "count"] = 0.0
+    out.loc[miss, "taker_buy_base"] = 0.0
+    out["open_time"] = out.index.to_numpy(dtype=np.int64) * 1000
+    return out.reset_index(drop=True)
+
+
+def densify_1s(df: pd.DataFrame, max_gap_s: int = MAX_FILL_S) -> pd.DataFrame:
+    df = df.sort_values("open_time").drop_duplicates("open_time", keep="last").reset_index(drop=True)
+    t = (df["open_time"].to_numpy(dtype=np.int64) // 1000)
+    if len(t) == 0:
+        return df
+    cuts = [0]
+    for i in range(1, len(t)):
+        if int(t[i] - t[i - 1]) > max_gap_s:
+            cuts.append(i)
+    cuts.append(len(t))
+    chunks = []
+    for a, b in zip(cuts, cuts[1:]):
+        if b - a < WARMUP + 10:
+            continue
+        chunks.append(densify_chunk(df.iloc[a:b]))
+    if not chunks:
+        return densify_chunk(df)
+    out = pd.concat(chunks, ignore_index=True)
+    return out
+
+
 def flatten_tree(node: dict) -> list[dict]:
     nodes: list[dict | None] = []
 
@@ -288,90 +269,181 @@ def sigmoid(z: float) -> float:
     return ez / (1.0 + ez)
 
 
-def gated_stats(y: np.ndarray, p: np.ndarray, tau: float) -> dict:
-    gated = (p >= tau) | (p <= (1.0 - tau))
+def vol_proxy_bps(X: np.ndarray) -> np.ndarray:
+    rv5 = X[:, FEATURES.index("rv_5")]
+    rv60 = X[:, FEATURES.index("rv_60")]
+    return np.maximum(rv5, rv60) * math.sqrt(HORIZON_5) * 1e4
+
+
+def lookup_bins(conf: np.ndarray, bins: list[dict], fallback: float) -> np.ndarray:
+    out = np.full_like(conf, fallback, dtype=np.float64)
+    if not bins:
+        return out
+    for b in bins:
+        m = (conf >= b["lo"]) & (conf < b["hi"])
+        out[m] = b["mean_abs"]
+    m_hi = conf >= bins[-1]["hi"]
+    out[m_hi] = bins[-1]["mean_abs"]
+    return out
+
+
+def predict_abs_move(p: np.ndarray, X: np.ndarray, calib: dict) -> np.ndarray:
+    conf = np.abs(p - 0.5)
+    vol = vol_proxy_bps(X)
+    lin = (
+        float(calib.get("abs_intercept") or 0.0)
+        + float(calib.get("abs_beta_conf") or 0.0) * conf
+        + float(calib.get("abs_beta_vol") or 0.0) * vol
+    )
+    lin = np.maximum(lin, 0.05)
+    bin_e = lookup_bins(conf, calib.get("abs_bins") or [], float(calib.get("mean_abs_bps") or 1.0))
+    typical = np.maximum(float(calib.get("mean_abs_bps") or 0.5), 0.5) * (0.45 + 0.55 * np.clip(conf / 0.5, 0, 1))
+    blended = 0.40 * lin + 0.35 * bin_e + 0.25 * typical
+    return np.clip(blended, 0.05, 25.0)
+
+
+def gate_mask(p: np.ndarray, e_abs: np.ndarray, tau: float, min_move: float) -> np.ndarray:
+    return ((p >= tau) | (p <= (1.0 - tau))) & (e_abs >= min_move)
+
+
+def eval_gate(y: np.ndarray, p: np.ndarray, bps: np.ndarray, e_abs: np.ndarray, tau: float, min_move: float) -> dict:
+    gated = gate_mask(p, e_abs, tau, min_move)
     n = int(gated.sum())
+    cov = float(n / len(y)) if len(y) else 0.0
+    empty = {
+        "tau": float(tau),
+        "min_move_bps": float(min_move),
+        "gated_acc": None,
+        "n": 0,
+        "coverage": 0.0,
+        "mean_abs_move_bps": None,
+        "mean_signed_bps": None,
+        "expectancy_1bp": None,
+        "expectancy_2bp": None,
+        "mean_e_abs_bps": None,
+    }
     if n == 0:
-        return {"gated_acc": None, "n": 0, "coverage": 0.0}
+        return empty
     pred = (p >= 0.5).astype(np.int32)
     acc = float((pred[gated] == y[gated]).mean())
-    return {"gated_acc": acc, "n": n, "coverage": float(n / len(y))}
-
-
-def trade_stats(y: np.ndarray, p: np.ndarray, bps: np.ndarray, tau: float) -> dict:
-    gated = (p >= tau) | (p <= (1.0 - tau))
-    n = int(gated.sum())
-    if n == 0:
-        return {
-            "mean_abs_move_bps": None,
-            "mean_signed_bps": None,
-            "expectancy_1bp": None,
-        }
     pred_sign = np.where(p >= 0.5, 1.0, -1.0)
     signed = pred_sign[gated] * bps[gated]
-    abs_move = np.abs(bps[gated])
     mean_signed = float(np.nanmean(signed))
     return {
-        "mean_abs_move_bps": float(np.nanmean(abs_move)),
+        "tau": float(tau),
+        "min_move_bps": float(min_move),
+        "gated_acc": acc,
+        "n": n,
+        "coverage": cov,
+        "mean_abs_move_bps": float(np.nanmean(np.abs(bps[gated]))),
         "mean_signed_bps": mean_signed,
-        "expectancy_1bp": mean_signed - COST_BPS,
+        "expectancy_1bp": mean_signed - 1.0,
+        "expectancy_2bp": mean_signed - 2.0,
+        "mean_e_abs_bps": float(np.nanmean(e_abs[gated])),
     }
 
 
-def pick_tau(y: np.ndarray, p: np.ndarray) -> tuple[float, dict]:
-    preferred = [0.58, 0.56, 0.60, 0.57, 0.59, 0.55, 0.61]
-    for tau in preferred:
-        st = gated_stats(y, p, float(tau))
-        st["tau"] = float(tau)
-        if (
-            st["n"] >= 200
-            and st["coverage"] >= MIN_COVERAGE
-            and st["gated_acc"] is not None
-            and st["gated_acc"] >= 0.56
-        ):
-            return float(tau), st
-    best = None
-    for tau in np.round(np.linspace(0.52, 0.70, 37), 4):
-        st = gated_stats(y, p, float(tau))
-        st["tau"] = float(tau)
-        if st["n"] < 200 or st["coverage"] < MIN_COVERAGE:
-            continue
-        acc = st["gated_acc"]
-        score = acc + 0.015 * min(st["coverage"], 0.25)
-        cand = (score, st["coverage"], -float(tau), st)
-        if best is None or cand > best:
-            best = cand
-    if best is None:
-        st = gated_stats(y, p, 0.58)
-        st["tau"] = 0.58
-        return 0.58, st
-    return best[3]["tau"], best[3]
+def pick_gate(y: np.ndarray, p: np.ndarray, bps: np.ndarray, e_abs: np.ndarray) -> tuple[float, float, dict]:
+    taus = [0.52, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.60, 0.62, 0.64, 0.66]
+    moves = [0.80, 0.90, 1.00, 1.10, 1.20, 1.40, 1.60, 2.00, 2.50]
+    cands: list[dict] = []
+    for tau in taus:
+        for mv in moves:
+            st = eval_gate(y, p, bps, e_abs, float(tau), float(mv))
+            if st["n"] < 200 or st["coverage"] < MIN_COVERAGE:
+                continue
+            if st["expectancy_1bp"] is None:
+                continue
+            cands.append(st)
+    if not cands:
+        st = eval_gate(y, p, bps, e_abs, 0.58, TARGET_MIN_MOVE)
+        return 0.58, TARGET_MIN_MOVE, st
+
+    def score(st: dict) -> tuple:
+        e1 = float(st["expectancy_1bp"])
+        cov = float(st["coverage"])
+        mv = float(st["min_move_bps"])
+        tau = float(st["tau"])
+        cov_bonus = 0.015 if cov >= PREF_COVERAGE else 0.0
+        cov_term = 0.02 * min(cov, 0.12)
+        prefer_1bp = 0.012 if abs(mv - TARGET_MIN_MOVE) < 1e-9 else 0.0
+        prefer_tau = 0.004 if abs(tau - 0.58) < 1e-9 else 0.0
+        return (e1 + cov_bonus + cov_term + prefer_1bp + prefer_tau, e1, cov)
+
+    ranked = sorted(cands, key=score, reverse=True)
+    best_e1 = float(ranked[0]["expectancy_1bp"])
+    near = [
+        st
+        for st in ranked
+        if float(st["expectancy_1bp"]) >= best_e1 - 0.02 and st["coverage"] >= PREF_COVERAGE
+    ]
+    pool = near or ranked
+    pool.sort(
+        key=lambda st: (
+            abs(float(st["min_move_bps"]) - TARGET_MIN_MOVE),
+            abs(float(st["tau"]) - 0.58),
+            -float(st["expectancy_1bp"]),
+        )
+    )
+    chosen = pool[0]
+    return float(chosen["tau"]), float(chosen["min_move_bps"]), chosen
 
 
-def fit_move_calib(p: np.ndarray, bps: np.ndarray, tau: float) -> dict:
-    """Map p_up → expected signed 5s/15s move in bps (linear, leak-free on VAL)."""
+def fit_move_calib(p: np.ndarray, bps: np.ndarray, X: np.ndarray, tau: float) -> dict:
     ok = np.isfinite(p) & np.isfinite(bps)
     x = p[ok] - 0.5
     y = bps[ok]
+    abs_y = np.abs(bps)
+    conf = np.abs(p - 0.5)
+    vol = vol_proxy_bps(X)
     if len(x) < 100 or float(np.var(x)) < 1e-12:
+        mean_abs = float(np.nanmean(abs_y[ok])) if ok.any() else 0.0
         return {
             "beta_bps": 0.0,
             "intercept_bps": 0.0,
             "gated_up_mean_bps": 0.0,
             "gated_down_mean_bps": 0.0,
-            "mean_abs_bps": float(np.nanmean(np.abs(y))) if len(y) else 0.0,
+            "mean_abs_bps": mean_abs,
+            "abs_intercept": mean_abs,
+            "abs_beta_conf": 0.0,
+            "abs_beta_vol": 1.0,
+            "abs_bins": [],
         }
     varx = float(np.var(x))
     beta = float(np.cov(x, y, ddof=0)[0, 1] / varx)
     intercept = float(np.mean(y) - beta * np.mean(x))
     up = (p >= tau) & ok
     down = (p <= 1.0 - tau) & ok
+
+    A = np.column_stack([np.ones(ok.sum()), conf[ok], vol[ok]])
+    coef, _, _, _ = np.linalg.lstsq(A, abs_y[ok], rcond=None)
+
+    bins: list[dict] = []
+    edges = np.linspace(0.0, 0.5, 11)
+    for i in range(len(edges) - 1):
+        m = ok & (conf >= edges[i]) & (conf < edges[i + 1] if i < len(edges) - 2 else conf <= edges[i + 1])
+        if int(m.sum()) < 80:
+            continue
+        bins.append(
+            {
+                "lo": float(edges[i]),
+                "hi": float(edges[i + 1]),
+                "mean_abs": float(np.mean(abs_y[m])),
+                "p50": float(np.median(abs_y[m])),
+                "p70": float(np.quantile(abs_y[m], 0.70)),
+                "n": int(m.sum()),
+            }
+        )
     return {
         "beta_bps": beta,
         "intercept_bps": intercept,
         "gated_up_mean_bps": float(np.nanmean(bps[up])) if up.any() else 0.0,
         "gated_down_mean_bps": float(np.nanmean(bps[down])) if down.any() else 0.0,
-        "mean_abs_bps": float(np.nanmean(np.abs(y))),
+        "mean_abs_bps": float(np.nanmean(abs_y[ok])),
+        "abs_intercept": float(coef[0]),
+        "abs_beta_conf": float(coef[1]),
+        "abs_beta_vol": float(coef[2]),
+        "abs_bins": bins,
     }
 
 
@@ -418,7 +490,7 @@ def train_head(
         "learning_rate": 0.04,
         "num_leaves": 31,
         "max_depth": 6,
-        "min_child_samples": 600,
+        "min_child_samples": 400,
         "subsample": 0.8,
         "subsample_freq": 1,
         "colsample_bytree": 0.8,
@@ -441,41 +513,59 @@ def train_head(
     )
     p_va = booster.predict(X_va, num_iteration=booster.best_iteration)
     p_te = booster.predict(X_te, num_iteration=booster.best_iteration)
-    tau, val_st = pick_tau(y_va, p_va)
-    test_st = gated_stats(y_te, p_te, tau)
-    test_st.update(trade_stats(y_te, p_te, bps_te, tau))
-    val_st.update(trade_stats(y_va, p_va, bps_va, tau))
+
+    calib = fit_move_calib(p_va, bps_va, X_va, 0.58)
+    e_va = predict_abs_move(p_va, X_va, calib)
+    e_te = predict_abs_move(p_te, X_te, calib)
+    tau, min_move, val_st = pick_gate(y_va, p_va, bps_va, e_va)
+    calib["min_move_bps"] = float(min_move)
+    test_st = eval_gate(y_te, p_te, bps_te, e_te, tau, min_move)
 
     ret1 = X_te[:, FEATURES.index("ret_1")]
     naive_pred = (ret1 > 0).astype(np.int32)
     naive_last_acc = float((naive_pred == y_te).mean())
     test_st["naive_last_acc"] = naive_last_acc
 
+    ungated = eval_gate(y_te, p_te, bps_te, e_te, tau, 0.0)
+    ungated["naive_last_acc"] = naive_last_acc
+    test_st["ungated_tau_only"] = {
+        "gated_acc": ungated["gated_acc"],
+        "n": ungated["n"],
+        "coverage": ungated["coverage"],
+        "mean_abs_move_bps": ungated["mean_abs_move_bps"],
+        "expectancy_1bp": ungated["expectancy_1bp"],
+        "expectancy_2bp": ungated["expectancy_2bp"],
+    }
+
     print(
-        f"VAL  h={horizon} tau={tau:.3f} gated_acc={val_st['gated_acc']:.4f} "
-        f"n={val_st['n']} cov={val_st['coverage']:.3f} "
-        f"|move|={val_st['mean_abs_move_bps']:.3f}bps E1={val_st['expectancy_1bp']:.3f}",
+        f"VAL  h={horizon} tau={tau:.3f} min_move={min_move:.2f}bp "
+        f"gated_acc={val_st['gated_acc']:.4f} n={val_st['n']} cov={val_st['coverage']:.3f} "
+        f"|move|={val_st['mean_abs_move_bps']:.3f}bps E1={val_st['expectancy_1bp']:.3f} "
+        f"E2={val_st['expectancy_2bp']:.3f}",
         flush=True,
     )
     print(
-        f"TEST h={horizon} tau={tau:.3f} gated_acc={test_st['gated_acc']:.4f} "
-        f"n={test_st['n']} cov={test_st['coverage']:.3f} "
+        f"TEST h={horizon} tau={tau:.3f} min_move={min_move:.2f}bp "
+        f"gated_acc={test_st['gated_acc']:.4f} n={test_st['n']} cov={test_st['coverage']:.3f} "
         f"naive={naive_last_acc:.4f} |move|={test_st['mean_abs_move_bps']:.3f}bps "
-        f"E1={test_st['expectancy_1bp']:.3f}",
+        f"E1={test_st['expectancy_1bp']:.3f} E2={test_st['expectancy_2bp']:.3f}",
+        flush=True,
+    )
+    u = test_st["ungated_tau_only"]
+    print(
+        f"TEST τ-only (no move gate) acc={u['gated_acc']:.4f} cov={u['coverage']:.3f} "
+        f"|move|={u['mean_abs_move_bps']:.3f} E1={u['expectancy_1bp']:.3f}",
         flush=True,
     )
 
     compact = compact_dump(booster)
     sanity = verify_dump(compact, X_te, p_te)
     gain = booster.feature_importance(importance_type="gain")
-    importance = [
-        {"name": FEATURES[i], "gain": float(gain[i])}
-        for i in np.argsort(-gain)
-    ]
-    calib = fit_move_calib(p_va, bps_va, tau)
+    importance = [{"name": FEATURES[i], "gain": float(gain[i])} for i in np.argsort(-gain)]
     print(f"Dump scorer matches LightGBM predict() (h={horizon}).", flush=True)
     print(
-        f"calib h={horizon} beta={calib['beta_bps']:.4f} "
+        f"calib h={horizon} beta={calib['beta_bps']:.4f} abs_b0={calib['abs_intercept']:.4f} "
+        f"abs_bconf={calib['abs_beta_conf']:.4f} abs_bvol={calib['abs_beta_vol']:.4f} "
         f"up={calib['gated_up_mean_bps']:.4f} down={calib['gated_down_mean_bps']:.4f}",
         flush=True,
     )
@@ -483,6 +573,7 @@ def train_head(
         "booster": booster,
         "compact": compact,
         "tau": float(tau),
+        "min_move_bps": float(min_move),
         "val": val_st,
         "test": test_st,
         "sanity": sanity,
@@ -501,20 +592,28 @@ def should_swap_live(test_st: dict) -> tuple[bool, str]:
     acc = test_st.get("gated_acc")
     cov = test_st.get("coverage") or 0.0
     e1 = test_st.get("expectancy_1bp")
-    if acc is None:
-        return False, "pas de gated_acc TEST"
-    if acc + 1e-12 >= BASELINE_GATED and cov >= MIN_COVERAGE:
-        return True, f"TEST gated {acc:.4f} ≥ baseline {BASELINE_GATED:.4f}"
-    better_e = e1 is not None and e1 > -0.85
-    similar_cov = abs(cov - BASELINE_COVERAGE) <= 0.15
-    if acc >= BASELINE_GATED - 0.01 and better_e and similar_cov:
+    n = int(test_st.get("n") or 0)
+    usable = cov >= MIN_COVERAGE and n >= 200
+    if acc is None or not usable:
+        return False, (
+            f"couverture TEST trop faible (cov={cov:.4f}, n={n}) — on garde les poids live"
+        )
+    better_e = e1 is not None and e1 > BASELINE_E1 + 1e-12
+    better_acc = acc + 1e-12 >= BASELINE_GATED
+    if better_e:
         return True, (
-            f"TEST gated {acc:.4f} proche du baseline, E après 1bp={e1:.3f} "
-            f"avec couverture similaire ({cov:.3f})"
+            f"TEST E après 1bp {e1:.3f} > main {BASELINE_E1:.3f} "
+            f"(acc={acc:.4f}, cov={cov:.3f})"
+        )
+    if better_acc:
+        return True, (
+            f"TEST gated {acc:.4f} ≥ main {BASELINE_GATED:.4f} "
+            f"(E1={e1:.3f}, cov={cov:.3f})"
         )
     return False, (
         f"on garde les poids live actuels "
-        f"(TEST gated {acc:.4f} vs baseline {BASELINE_GATED:.4f}, E1={e1})"
+        f"(TEST gated {acc:.4f} vs {BASELINE_GATED:.4f}, "
+        f"E1={e1:.3f} vs {BASELINE_E1:.3f}, cov={cov:.3f})"
     )
 
 
@@ -522,19 +621,63 @@ def write_json(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj))
 
 
-def main() -> int:
-    n_days = int(sys.argv[1]) if len(sys.argv) > 1 else 45
-    end = date(2026, 8, 23)
-    days = daterange(end, n_days)
-    print(f"Downloading {len(days)} daily 1s zips ({days[0]} → {days[-1]})", flush=True)
-    paths = download_days(days)
-    if len(paths) < 20:
-        print(f"Not enough days downloaded: {len(paths)}", file=sys.stderr)
-        return 1
+def bars_span_days(path: Path) -> float:
+    df = pd.read_csv(path, compression="gzip", usecols=["open_time"])
+    t = df["open_time"].to_numpy(dtype=np.int64)
+    if len(t) < 2:
+        return 0.0
+    return float((t.max() - t.min()) / 1000.0 / 86400.0)
 
-    print("Loading klines…", flush=True)
-    df = load_klines(paths)
-    print(f"  rows={len(df):,}", flush=True)
+
+def ensure_bars(n_days: int) -> Path:
+    if BARS_PATH.exists():
+        span = bars_span_days(BARS_PATH)
+        print(f"Existing Coinbase 1s bars span={span:.2f}d at {BARS_PATH}", flush=True)
+        if span >= max(3.0, 0.85 * n_days):
+            return BARS_PATH
+        print("Span short of target — fetching more trades…", flush=True)
+    else:
+        print("No Coinbase 1s bars yet — downloading public trades…", flush=True)
+    return fetch_days(n_days)
+
+
+def load_coinbase_bars(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, compression="gzip")
+    for c in ["open_time", "open", "high", "low", "close", "volume", "count", "taker_buy_base"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(subset=["close"]).sort_values("open_time").reset_index(drop=True)
+    print(f"  raw traded seconds={len(df):,}", flush=True)
+    dense = densify_1s(df)
+    print(f"  densified 1s bars={len(dense):,}", flush=True)
+    t0 = int(dense["open_time"].iloc[0])
+    t1 = int(dense["open_time"].iloc[-1])
+    print(
+        f"  range {datetime.fromtimestamp(t0 / 1000, tz=timezone.utc).isoformat()} → "
+        f"{datetime.fromtimestamp(t1 / 1000, tz=timezone.utc).isoformat()} "
+        f"({(t1 - t0) / 1000 / 86400:.2f} d)",
+        flush=True,
+    )
+    return dense
+
+
+def main() -> int:
+    n_days = int(sys.argv[1]) if len(sys.argv) > 1 else 14
+    print(f"Coinbase BTC-USD 1s train target={n_days}d", flush=True)
+    path = ensure_bars(n_days)
+    df = load_coinbase_bars(path)
+    span_d = float(
+        (df["open_time"].iloc[-1] - df["open_time"].iloc[0]) / 1000.0 / 86400.0
+    )
+    fallback_note = None
+    if span_d < 3:
+        print(f"Not enough Coinbase 1s history ({span_d:.2f} d).", file=sys.stderr)
+        return 1
+    if span_d < 7:
+        fallback_note = (
+            f"historique 1s Coinbase {span_d:.1f} j (< 7 j visés) — horizon 5s conservé, "
+            "pas de bascule 5 minutes"
+        )
+        print(f"NOTE: {fallback_note}", flush=True)
 
     print("Features…", flush=True)
     X_df = make_features(df)
@@ -565,7 +708,6 @@ def main() -> int:
         X_tr, y5_tr, X_va, y5_va, X_te, y5_te, bps5_va, bps5_te, close_te, HORIZON_5
     )
 
-    # 15s head: same leak-free rows that also have a 15s forward label.
     y15_ok = pd.Series(np.isfinite(y15_all) & np.isfinite(bps15_all), index=df.index)
     both = valid5 & y15_ok
     X15 = X_df.loc[both, FEATURES].to_numpy(dtype=np.float64)
@@ -593,6 +735,14 @@ def main() -> int:
 
     MODELS.mkdir(parents=True, exist_ok=True)
     FN_MODELS.mkdir(parents=True, exist_ok=True)
+    t0 = int(df["open_time"].iloc[0])
+    t1 = int(df["open_time"].iloc[-1])
+    days = sorted(
+        {
+            datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).date().isoformat()
+            for ts in (t0, t1)
+        }
+    )
 
     def pack_meta(head: dict, n_tr: int, n_va: int, n_te: int, extra: dict | None = None) -> dict:
         meta = {
@@ -600,13 +750,16 @@ def main() -> int:
             "horizon_s": head["horizon_s"],
             "bar_s": 1,
             "symbol": "BTC-USD",
-            "train_archive": "binance_vision_btcusdt_1s",
+            "train_archive": "coinbase_exchange_btc_usd_trades_1s",
             "live_venue": "coinbase",
             "live_product": "BTC-USD",
             "tau": head["tau"],
+            "min_move_bps": head["min_move_bps"],
             "features": FEATURES,
-            "n_days": len(paths),
-            "days": [p.stem.replace("BTCUSDT-1s-", "") for p in paths],
+            "n_days": round(span_d, 3),
+            "span_start": datetime.fromtimestamp(t0 / 1000, tz=timezone.utc).isoformat(),
+            "span_end": datetime.fromtimestamp(t1 / 1000, tz=timezone.utc).isoformat(),
+            "days": days,
             "n_train": int(n_tr),
             "n_val": int(n_va),
             "n_test": int(n_te),
@@ -619,14 +772,19 @@ def main() -> int:
             "importance": head["importance"],
             "calib": head["calib"],
             "cost_bps": COST_BPS,
+            "previous_main": PREV_MAIN,
+            "fallback_note": fallback_note,
             "swapped_live": swap if head["horizon_s"] == HORIZON_5 else None,
             "swap_reason": reason if head["horizon_s"] == HORIZON_5 else None,
+            "honest": (
+                "Edge directionnel vs naive possible, mais l'espérance après 1 bp de friction "
+                "peut rester négative — ce n'est pas un edge ATM."
+            ),
         }
         if extra:
             meta.update(extra)
         return meta
 
-    # Always write 15s (faint path). 5s live weights only if swap.
     txt15 = MODELS / "fanal_sec_lgbm_15.txt"
     head15["booster"].save_model(str(txt15), num_iteration=head15["best_iteration"])
     meta15 = pack_meta(head15, i_tr15, i_va15 - i_tr15, n15 - i_va15)
@@ -642,21 +800,19 @@ def main() -> int:
     (FN_MODELS / "fanal_sec_meta_15.json").write_text(json.dumps(meta15, indent=2))
     print(f"Wrote 15s model enabled={enabled15}", flush=True)
 
+    report = pack_meta(head5, i_train, i_val - i_train, n - i_val, {"horizon_15_enabled": enabled15})
+    (MODELS / "fanal_sec_train_report.json").write_text(json.dumps(report, indent=2))
+
     if swap:
         txt5 = MODELS / "fanal_sec_lgbm.txt"
         head5["booster"].save_model(str(txt5), num_iteration=head5["best_iteration"])
-        meta5 = pack_meta(head5, i_train, i_val - i_train, n - i_val, {"horizon_15_enabled": enabled15})
         write_json(MODELS / "fanal_sec_lgbm.json", head5["compact"])
-        (MODELS / "fanal_sec_meta.json").write_text(json.dumps(meta5, indent=2))
+        (MODELS / "fanal_sec_meta.json").write_text(json.dumps(report, indent=2))
         write_json(FN_MODELS / "fanal_sec_lgbm.json", head5["compact"])
-        (FN_MODELS / "fanal_sec_meta.json").write_text(json.dumps(meta5, indent=2))
+        (FN_MODELS / "fanal_sec_meta.json").write_text(json.dumps(report, indent=2))
         print(f"Wrote live 5s weights {txt5}", flush=True)
     else:
-        # Keep current live JSON/txt. Still record the experiment next to models.
-        report = pack_meta(head5, i_train, i_val - i_train, n - i_val, {"kept_previous_live": True})
-        (MODELS / "fanal_sec_train_report.json").write_text(json.dumps(report, indent=2))
-        print("Kept previous live 5s weights; wrote fanal_sec_train_report.json", flush=True)
-        # Refresh meta calibration onto existing live model if feature names match — skip otherwise.
+        print("Kept previous live 5s trees; enabling 1bp move gate on existing calib.", flush=True)
         live_meta_path = MODELS / "fanal_sec_meta.json"
         if live_meta_path.exists():
             old = json.loads(live_meta_path.read_text())
@@ -664,15 +820,26 @@ def main() -> int:
             if old_feats == FEATURES:
                 old.update(
                     {
-                        "calib": head5["calib"],
-                        "importance": head5["importance"],
-                        "train_archive": "binance_vision_btcusdt_1s",
+                        "min_move_bps": TARGET_MIN_MOVE,
                         "live_venue": "coinbase",
                         "live_product": "BTC-USD",
                         "symbol": "BTC-USD",
                         "swap_reason": reason,
                         "swapped_live": False,
                         "horizon_15_enabled": enabled15,
+                        "previous_main": PREV_MAIN,
+                        "coinbase_train": {
+                            "archive": "coinbase_exchange_btc_usd_trades_1s",
+                            "test": head5["test"],
+                            "val": head5["val"],
+                            "tau": head5["tau"],
+                            "min_move_bps": head5["min_move_bps"],
+                            "n_days": round(span_d, 3),
+                            "kept_previous_live": True,
+                            "note": "poids live inchangés (Binance Vision) ; gate 1 bp appliqué à l'inférence",
+                        },
+                        "fallback_note": fallback_note,
+                        "honest": report["honest"],
                     }
                 )
                 live_meta_path.write_text(json.dumps(old, indent=2))

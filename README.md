@@ -2,7 +2,9 @@
 
 Prédicteur IA **indépendant** du prix Bitcoin à **5 secondes**. Interface française. Ce n’est **pas** un bot de trading, ni un conseil financier — un jouet de recherche.
 
-Le live lit **Coinbase Exchange** public REST, produit **BTC-USD** (ticker, carnet niveau 2, trades). Aucune clé API. Le classifieur LightGBM 5s a été entraîné hors-ligne sur des archives 1s **Binance Vision** (features relatives de microstructure, split temporel, sans fuite). Coinbase n’offre pas d’historique 1s : les bougies live 1s sont reconstruites à partir des trades + ticker.
+Le live lit **Coinbase Exchange** public REST, produit **BTC-USD** (ticker, carnet niveau 2, trades). Aucune clé API. Les bougies 1s live sont reconstruites à partir des trades (taker buy = maker `sell`). Le classifieur LightGBM 5s est entraîné hors-ligne sur la **même** reconstruction (pagination publique de `/products/BTC-USD/trades`). Coinbase n’offre pas d’archive 1s type Binance Vision.
+
+**Feu** seulement si (1) P(↑) sort de la bande τ **et** (2) le |move| 5s **attendu** ≥ **1 bp**. Objectif : meilleure espérance après 1 bp de coût, pas un headline de gated-accuracy.
 
 Repo : [github.com/Jayvy2002/fanal](https://github.com/Jayvy2002/fanal)
 
@@ -13,31 +15,35 @@ Le panneau principal est un graphique 1s (environ 4–5 minutes), pas un mot HAU
 | | |
 |---|---|
 | **Curseur blanc** | *Maintenant* |
-| **Trait or pointillé** | Trajectoire **prévue** pour les 5 prochaines secondes (et cible de prix). Échelle = mouvement attendu calibré sur la validation, pas un scénario inventé. |
+| **Trait or pointillé** | Trajectoire **prévue** pour les 5 prochaines secondes (et cible de prix). Échelle = |move| attendu calibré sur la validation. |
 | **Trait or pâle** | Tête 15s optionnelle (plus faible). |
 | **Vert** | La direction prévue a **matché** le réel une fois les 5s écoulées. |
 | **Rouge** | Direction **ratée**. |
-| **Les ~20 derniers appels** | Restent en traînée sur le graphique : le réel s’imprime par-dessus la prévision. |
+| **NEUTRE** | P dans la bande τ, **ou** |move| prévu sous 1 bp. |
 
 Bande **pourquoi** : rendement 5s, taker buy, OBI du carnet, etc.
 
 ## Test out-of-sample
 
-Split temporel (pas de shuffle) sur **45 jours** de klines 1s Binance Vision (2026-07-10 → 2026-08-23), horizon 5s, égalités exclues. Live = Coinbase BTC-USD.
+Split **temporel** (pas de shuffle). Horizon 5s, égalités exclues. Live = Coinbase BTC-USD. Le gate combine τ et `min_move_bps`.
 
-| | 5s (live) | 15s (trait pâle) |
-|---|---|---|
-| **τ** | 0,58 | 0,58 |
-| **Précision gated TEST** | **70,3 %** | 64,3 % |
-| n | 299 106 | 165 514 |
-| Couverture | 74,9 % | 47,5 % |
-| Naive (dernier rendement 1s) | 51,1 % | 52,2 % |
-| \|move\| moyen | 1,03 bps | 2,18 bps |
-| Espérance après 1 bp | −0,78 bps | −0,56 bps |
+Les chiffres **main précédente** (Binance Vision 45 j, τ=0,58 seul, live Coinbase) :
 
-VAL 5s était plus haute (81 %) que le TEST (70 %) : régime, comme souvent en microstructure. L’edge directionnel vs naive ~51 % est réel ; après 1 bp de friction l’espérance 5s reste négative parce que les moves sont minuscules. On ne maquille pas de résultats ATM.
+| | main (Binance 1s, τ seul) |
+|---|---|
+| **τ** | 0,58 |
+| **min \|move\|** | — |
+| **Précision gated TEST** | **70,3 %** |
+| n | 299 106 |
+| Couverture | 74,9 % |
+| Naive (dernier rendement 1s) | 51,1 % |
+| \|move\| moyen | 1,03 bps |
+| Espérance après 1 bp | **−0,78 bps** |
+| Espérance après 2 bp | −1,78 bps |
 
-Poids live : `models/fanal_sec_lgbm.txt` + dump JSON pour le scoreur Node. On ne remplace les poids que si le TEST gated égale ou bat le baseline (~67 %) ou si l’espérance est clairement meilleure à couverture comparable.
+Les chiffres **cette branche** (entraînement Coinbase 1s + gate 1 bp) sont dans `models/fanal_sec_meta.json` (`test`, `previous_main`, `swap_reason`). Un edge directionnel vs naive ~51 % peut être réel tout en restant **négatif après 1 bp** — on ne maquille pas d’ATM.
+
+Poids live : `models/fanal_sec_lgbm.txt` + dump JSON pour le scoreur Node. On ne remplace les poids que si le TEST a une **meilleure E après 1 bp** (moins négative / positive) **ou** une gated-acc ≥ main avec une couverture encore utilisable (~1–5 % des secondes, de préférence plus).
 
 ## Lancer en local
 
@@ -57,13 +63,14 @@ npm i -g netlify-cli
 npx netlify dev
 ```
 
-Ré-entraîner (optionnel, Python 3 + lightgbm/pandas/numpy) — archives Vision seulement :
+Ré-entraîner (Python 3 + lightgbm/pandas/numpy) — trades Coinbase publics seulement :
 
 ```bash
-python3 train/train_fanal.py 45
+pip install -r train/requirements.txt
+python3 train/train_fanal.py 14
 ```
 
-Les zips / CSV Vision restent dans `data/` (gitignoré), ainsi que les `.pkl`.
+Les dumps bruts / barres 1s restent dans `data/` (gitignoré), ainsi que les `.pkl`. Le script pagine `/products/BTC-USD/trades`, respecte les rate limits, et reconstruit des barres 1s. Horizon 5s conservé (pas de bascule 5 minutes).
 
 ## Déployer sur Netlify
 
@@ -88,4 +95,4 @@ Le paper trading 5s est **en mémoire par instance** : un cold start Netlify rem
 - `GET /api/health`
 - `GET /api/ticker` — ticker Coinbase BTC-USD (+ stats 24h)
 - `GET /api/book` — profondeur niveau 2, mid, OBI 10
-- `GET /api/live` — signal (`close`, `p_up`, `gated`, `horizon_s`, `expected_move_bps`, `target_px`) + spark ~300 points `{t,p}` + `forecasts[]` (path, hit, target) + paper + carnet + bande pourquoi
+- `GET /api/live` — signal (`close`, `p_up`, `gated`, `horizon_s`, `expected_move_bps`, `min_move_bps`, `target_px`) + spark ~300 points `{t,p}` + `forecasts[]` (path, hit, target) + paper + carnet + bande pourquoi
