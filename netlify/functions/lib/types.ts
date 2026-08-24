@@ -1,0 +1,89 @@
+export type Side = "up" | "down" | "flat";
+
+export type Signal = {
+  side: Side;
+  label: "HAUSSIER" | "BAISSIER" | "NEUTRE";
+  p_up: number;
+  confidence: number;
+  gated: boolean;
+  horizon_s: 5;
+  why: string;
+  close: number;
+  tau: number;
+};
+
+export type BookLevel = { p: number; q: number };
+
+export type Book = {
+  mid: number;
+  obi_10: number;
+  tilt: "achat" | "vente" | "neutre";
+  bids: BookLevel[];
+  asks: BookLevel[];
+  spread_bps: number;
+};
+
+export type SparkPoint = { t: number; p: number; side: Side | null };
+
+export type PaperRow = {
+  ts: number;
+  side: Exclude<Side, "flat">;
+  label: "HAUSSIER" | "BAISSIER";
+  mid: number;
+  mid_end: number | null;
+  hit: boolean | null;
+  signed_bps: number | null;
+  horizon_s: 5;
+};
+
+export type Paper = {
+  n: number;
+  hits: number;
+  hit_rate: number | null;
+  pending: PaperRow | null;
+  remaining_s: number;
+  recent: PaperRow[];
+  horizon_s: 5;
+};
+
+export type TestMeta = {
+  gated_acc: number | null;
+  n: number;
+  coverage: number;
+  naive_last_acc: number;
+};
+
+export type LiveResponse = {
+  signal: Signal;
+  flux: Signal & { ret_5_bps: number | null; rv_60: number | null };
+  book: Book;
+  spark: SparkPoint[];
+  paper: Paper;
+  error: string | null;
+  kind: "lgbm";
+  horizon_s: 5;
+  bar_s: 1;
+  tau: number;
+  test: TestMeta;
+};
+
+export type TickerResponse = {
+  symbol: string;
+  last: number;
+  change: number;
+  change_pct: number;
+  high: number;
+  low: number;
+  volume: number;
+  ts: number;
+};
+
+export type HealthResponse = {
+  ok: boolean;
+  kind: "lgbm";
+  horizon_s: 5;
+  bar_s: 1;
+  tau: number;
+  symbol: string;
+  paper: "memory";
+};

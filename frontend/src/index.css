@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --color-bg: #07090d;
+  --color-gold: #c8a46a;
+  --color-up: #3dd68c;
+  --color-down: #f0616d;
+  --color-muted: #8b919c;
+  --color-line: #ffffff12;
+  --color-card: #0b0e13;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  background: #07090d;
+  color: #e8eaee;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-image:
+    radial-gradient(1200px 500px at 50% -10%, #c8a46a12, transparent 55%),
+    linear-gradient(#07090d, #07090d);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
