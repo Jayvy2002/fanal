@@ -99,7 +99,7 @@ export function PaperTable({
   onPaper?: (paper: Paper) => void;
 }) {
   const p = live.paper;
-  const mode: PaperMode = p.mode ?? "taker";
+  const mode: PaperMode = p.mode ?? "maker";
   const hitRate = p.hit_rate;
   const realized = p.realized_pnl_usd ?? 0;
   const equity = p.equity_usd ?? p.starting_cash_usd ?? 1000;
@@ -108,18 +108,21 @@ export function PaperTable({
   const pnlTone = realized > 0 ? "up" : realized < 0 ? "down" : "muted";
   const open = p.open_position;
   const rows: PaperRow[] = [...(p.pending ? [p.pending] : []), ...p.recent].slice(0, 14);
-  const rt = p.round_trip_fee_bps ?? (mode === "taker" ? 120 : 80);
-  const taker = p.taker_fee_bps ?? 60;
-  const maker = p.maker_fee_bps ?? 40;
+  const rt = p.round_trip_fee_bps ?? (mode === "taker" ? 240 : 120);
+  const taker = p.taker_fee_bps ?? 120;
+  const maker = p.maker_fee_bps ?? 60;
+  const gate = p.min_move_bps ?? 120;
+  const fee = live.fee;
+  const horizonM = Math.round((p.horizon_s || 900) / 60);
 
   return (
     <section className="rounded-xl border border-line bg-card px-5 py-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] tracking-[0.16em] text-muted">PAPER 24 H · BTC-USD</div>
+          <div className="text-[11px] tracking-[0.16em] text-muted">PAPER 24 H · FAISEUR 15 MIN · BTC-USD</div>
           <div className="mt-1 text-[13px] text-white/85">
-            {p.clip_usd ?? 75}&nbsp;$ US / signal · 1 position · flatten {p.horizon_s}s · départ{" "}
-            {nfUsd.format(start)}
+            {p.clip_usd ?? 75}&nbsp;$ US / signal · 1 position · flatten {horizonM} min · départ{" "}
+            {nfUsd.format(start)} · <span className="text-gold">pas d’ordres live</span>
           </div>
         </div>
         <div className="flex rounded-full border border-line p-0.5 text-[12px]">
@@ -153,7 +156,10 @@ export function PaperTable({
           label="Taux de hits"
           value={hitRate === null ? "—" : `${nfPrice.format(hitRate * 100)} %`}
         />
-        <Stat label="Trades clos" value={`${p.n}${p.n_cancelled ? ` · ${p.n_cancelled} ann.` : ""}`} />
+        <Stat
+          label="Fills / annulations"
+          value={`${p.n} fill · ${p.n_cancelled ?? 0} ann.`}
+        />
         <Stat
           label="Position"
           value={
@@ -164,17 +170,33 @@ export function PaperTable({
                 : "Plat"
           }
         />
-        <Stat label="Mode" value={mode === "maker" ? "Faiseur / post-only" : "Preneur (deux côtés)"} />
+        <Stat
+          label="Gate / RT"
+          value={`${nfPrice.format(gate)} bp · RT ${nfPrice.format(rt)} bp`}
+        />
       </div>
 
       <div className="mt-3 rounded-lg border border-gold/25 bg-gold/5 px-3 py-2 text-[12px] leading-relaxed text-gold/90">
-        Palier {p.fee_tier ?? "Coinbase Advanced Trade · 0–10 000 $ US / 30 j"} : preneur {nfPrice.format(taker)}{" "}
-        bp, faiseur {nfPrice.format(maker)} bp. Aller-retour {mode === "taker" ? "preneur" : "faiseur"} ={" "}
-        {nfPrice.format(rt)} bp vs |move| 5s ~1 bp — le paper preneur devrait perdre. Aucun ordre réel, aucune
-        clé, aucun retrait. Carnet persisté ({p.store === "blobs" ? "Netlify Blobs" : "fichier local"}) : un cold
-        start ne remet plus le livre à zéro. Short = notionnel virtuel. Hit* = direction du fill, sans frais ;
-        le PnL $ compte les deux jambes. Cron 1 min (paper-tick) avance le flatten si l’onglet n’est pas au
-        premier plan. Un jour vert ici voudrait dire qu’on peut parler live — pas avant.
+        <div>
+          Produit {fee?.product ?? p.fee_product ?? "BTC-USD"} · {p.fee_tier ?? fee?.schedule} : preneur{" "}
+          {nfPrice.format(taker)} bp, faiseur {nfPrice.format(maker)} bp. Aller-retour {mode === "taker" ? "preneur" : "faiseur"}{" "}
+          = {nfPrice.format(rt)} bp. Gate paper = {nfPrice.format(gate)} bp (RT faiseur).
+        </div>
+        <div className="mt-1 text-gold/75">
+          {p.fee_caveat ?? fee?.caveat} Alternate : {p.fee_alternate ?? fee?.alternate}.{" "}
+          {(fee?.links ?? p.fee_links ?? []).map((l, i) => (
+            <a key={l.href} href={l.href} className="underline decoration-gold/40 hover:text-gold" target="_blank" rel="noreferrer">
+              {l.label}
+              {i < (fee?.links ?? p.fee_links ?? []).length - 1 ? " · " : ""}
+            </a>
+          ))}
+        </div>
+        <div className="mt-1 text-white/70">
+          Pas d’ordres live. Hit* = direction sans frais ; le PnL $ compte les deux jambes. Le |move| 15 m BTC
+          est souvent bien sous 120 bp — un carnet vide ou une E négative après frais est un résultat honnête, pas
+          un échec du paper. Cron 1 min (paper-tick) = une barre. Carnet persisté (
+          {p.store === "blobs" ? "Netlify Blobs" : "fichier local"}).
+        </div>
       </div>
 
       <div className="mt-3 overflow-x-auto">
@@ -195,8 +217,8 @@ export function PaperTable({
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={8} className="py-6 text-sm text-muted">
-                  En attente d’un signal gated (P hors bande ET |move| prévu ≥ {nfPrice.format(p.min_move_bps ?? 1)}{" "}
-                  bp). L’espérance après frais n’est pas maquillée.
+                  En attente d’un feu 15 m (P hors bande ET |move| prévu ≥ {nfPrice.format(gate)} bp). La
+                  couverture au gate frais peut être nulle — c’est acceptable.
                 </td>
               </tr>
             ) : (

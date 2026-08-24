@@ -1,4 +1,4 @@
-import type { FillRole, PaperMode } from "./paperFees";
+import { LEDGER_VERSION, type FillRole, type PaperMode } from "./paperFees";
 import type { Side } from "./types";
 
 export type PaperOrder = {
@@ -47,7 +47,7 @@ export type PaperTrade = {
 };
 
 export type Ledger = {
-  v: 1;
+  v: typeof LEDGER_VERSION;
   started_ts: number;
   updated_ts: number;
   mode: PaperMode;

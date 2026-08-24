@@ -107,7 +107,17 @@ export async function fetchTrades(limit = 1000, after?: number): Promise<Coinbas
 }
 
 export async function fetchCandles60(): Promise<CoinbaseCandle[]> {
-  return getJson<CoinbaseCandle[]>(`/products/${PRODUCT}/candles?granularity=60`, 20_000);
+  return fetchCandles1m(300);
+}
+
+/** Bougies 1m Coinbase Exchange. Sans start/end : les ~300 plus récentes (~5 h). */
+export async function fetchCandles1m(n = 252): Promise<CoinbaseCandle[]> {
+  const raw = await getJson<CoinbaseCandle[]>(
+    `/products/${PRODUCT}/candles?granularity=60`,
+    15_000,
+  );
+  const sorted = [...raw].sort((a, b) => a[0] - b[0]);
+  return n > 0 && sorted.length > n ? sorted.slice(-n) : sorted;
 }
 
 export function parseTradeTime(iso: string): number {

@@ -35,19 +35,22 @@ export default function App() {
       }
     };
     tick();
-    const id = setInterval(tick, 1000);
+    const id = setInterval(tick, 5000);
     return () => {
       stop = true;
       clearInterval(id);
     };
   }, []);
 
+  const cov = live?.test?.coverage;
+  const lowCov = cov != null && cov < 0.01;
+
   return (
     <div className="mx-auto min-h-screen max-w-[1440px]">
       <Header
         ticker={ticker}
         tau={live?.tau ?? 0.58}
-        minMoveBps={live?.min_move_bps ?? live?.signal.min_move_bps ?? 1}
+        minMoveBps={live?.min_move_bps ?? live?.signal.min_move_bps ?? 120}
         fallbackPrice={live?.signal.close ?? 0}
       />
       <main className="grid gap-4 p-4 lg:grid-cols-[1fr_300px]">
@@ -76,35 +79,40 @@ export default function App() {
         {live ? <OrderBook book={live.book} /> : <div className="rounded-xl border border-line bg-card" />}
       </main>
       <footer className="border-t border-line px-5 py-4 text-[11px] leading-relaxed text-muted">
-        Jouet de recherche, pas un conseil financier. Prix live publics Coinbase Exchange (BTC-USD :
-        ticker, carnet, trades). Features = dernière barre 1s <strong>complète</strong> (pas la seconde
-        en cours). Feu seulement si |move| prévu ≥ 1 bp (même formule qu’à l’entraînement). Paper 24 h
-        persisté (Netlify Blobs) + cron 1 min <code>paper-tick</code> : un onglet en arrière-plan ne
-        fige plus le flatten. Aucun ordre Coinbase réel.
+        Jouet de recherche, pas un conseil financier. Live = bougies 1 minute Coinbase Exchange BTC-USD
+        (REST public, sans clé). Features = dernière barre 1m <strong>complète</strong> (pas la minute en
+        cours). Feu HAUSSIER / BAISSIER si P(↑ 15m) sort de [0,42 ; 0,58] <em>et</em> |move| prévu ≥ 120 bp
+        (RT faiseur, Advanced Trade intro non vérifié). Paper faiseur 15 min, clip 75 $ US, 1 000 $ US.
+        Aucun ordre Coinbase réel.
         {live?.test?.gated_acc != null && (
           <>
             {" "}
-            Poids live (Binance Vision 1s, TEST τ-only) :{" "}
-            {(live.test.gated_acc * 100).toFixed(1).replace(".", ",")} % gated vs naive{" "}
-            {(live.test.naive_last_acc * 100).toFixed(1).replace(".", ",")} %
-            {live.test.expectancy_1bp != null
-              ? `, E après 1 bp ${live.test.expectancy_1bp.toFixed(2).replace(".", ",")} bp`
+            TEST 15m (gate 120 bp) : {(live.test.gated_acc * 100).toFixed(1).replace(".", ",")} % gated, n=
+            {live.test.n}, cov {((live.test.coverage ?? 0) * 100).toFixed(2).replace(".", ",")} %
+            {live.test.mean_abs_move_bps != null || live.test.all_test_mean_abs_bps != null
+              ? `, |move| 15m ${(live.test.mean_abs_move_bps ?? live.test.all_test_mean_abs_bps)!.toFixed(1).replace(".", ",")} bp`
+              : ""}
+            {live.test.expectancy_maker_rt != null
+              ? `, E après RT faiseur ${live.test.expectancy_maker_rt.toFixed(1).replace(".", ",")} bp`
+              : ""}
+            {live.test.expectancy_taker_rt != null
+              ? `, E après RT preneur ${live.test.expectancy_taker_rt.toFixed(1).replace(".", ",")} bp`
               : ""}
             .
           </>
         )}
-        {live?.coinbase_train?.test?.gated_acc != null && (
+        {lowCov && (
           <>
             {" "}
-            Réentraînement Coinbase {live.coinbase_train.n_days?.toFixed(0) ?? "14"} j + gate 1 bp :{" "}
-            {(live.coinbase_train.test.gated_acc * 100).toFixed(1).replace(".", ",")} % gated, cov{" "}
-            {((live.coinbase_train.test.coverage ?? 0) * 100).toFixed(0).replace(".", ",")} %
-            {live.coinbase_train.test.expectancy_1bp != null
-              ? `, E1 ${live.coinbase_train.test.expectancy_1bp.toFixed(2).replace(".", ",")} bp`
-              : ""}
-            {live.swapped_live === false
-              ? " — poids non retenus (E1 / acc pas meilleurs). Vecteurs live : log_vol / CVD ramenés à l’échelle Binance ; le reste est sans dimension."
-              : "."}
+            Couverture au gate frais ≈ 0 : le |move| 15 m BTC est trop souvent sous 120 bp. C’est un
+            résultat honnête, pas un jour vert.
+          </>
+        )}
+        {live?.train_n_days != null && (
+          <>
+            {" "}
+            Entraînement Coinbase 1m : {live.train_n_days.toFixed(1).replace(".", ",")} j
+            {live.train_n_bars != null ? ` (${live.train_n_bars.toLocaleString("fr-FR")} barres)` : ""}.
           </>
         )}
       </footer>

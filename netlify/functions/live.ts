@@ -6,6 +6,6 @@ export const handler = async () => {
     return json(200, await buildLive());
   } catch (err) {
     const msg = err instanceof Error ? err.message : "live_error";
-    return json(500, { error: msg, kind: "lgbm", horizon_s: 5, bar_s: 1 });
+    return json(500, { error: msg, kind: "lgbm", horizon_s: 900, bar_s: 60 });
   }
 };

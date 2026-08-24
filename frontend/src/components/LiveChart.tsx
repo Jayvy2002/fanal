@@ -5,12 +5,15 @@ import {
   nfPrice,
   type Forecast,
   type LiveResponse,
+  type PathPoint,
   type SparkPoint,
 } from "../lib/types";
 
 const W = 1120;
 const H = 420;
 const PAD = { l: 18, r: 88, t: 28, b: 32 };
+const LOOKBACK_MS = 3 * 3600_000;
+const FUTURE_MS = 32 * 60_000;
 
 function colorOf(f: Forecast): string {
   if (f.hit === null) return "#c8a46a";
@@ -27,10 +30,12 @@ export function LiveChart({ live }: { live: LiveResponse }) {
   const [hover, setHover] = useState<{ t: number; p: number } | null>(null);
   const spark = live.spark;
   const now = live.now || spark[spark.length - 1]?.t || Date.now();
+  const live15 = live.path15 ?? [];
+  const live30 = live.path30 ?? [];
 
   const geo = useMemo(() => {
-    const tMin = now - 270_000;
-    const tMax = now + 18_000;
+    const tMin = now - LOOKBACK_MS;
+    const tMax = now + FUTURE_MS;
     const vis = spark.filter((s) => s.t >= tMin && s.t <= now);
     const prices: number[] = [];
     for (const s of vis) {
@@ -38,11 +43,10 @@ export function LiveChart({ live }: { live: LiveResponse }) {
       if (s.h != null) prices.push(s.h);
       if (s.l != null) prices.push(s.l);
     }
-    for (const f of live.forecasts) {
-      for (const pt of f.path) {
-        if (pt.t >= tMin && pt.t <= tMax) prices.push(pt.p);
-      }
-      if (f.target_px) prices.push(f.target_px);
+    const extra: PathPoint[] = [...live15, ...live30];
+    for (const f of live.forecasts) extra.push(...f.path);
+    for (const pt of extra) {
+      if (pt.t >= tMin && pt.t <= tMax) prices.push(pt.p);
     }
     if (live.signal.target_px) prices.push(live.signal.target_px);
     let lo = Math.min(...prices);
@@ -59,14 +63,14 @@ export function LiveChart({ live }: { live: LiveResponse }) {
     const plotH = H - PAD.t - PAD.b;
     const x = (t: number) => PAD.l + ((t - tMin) / (tMax - tMin)) * plotW;
     const y = (p: number) => PAD.t + (1 - (p - lo) / (hi - lo)) * plotH;
-    return { tMin, tMax, vis, lo, hi, span: hi - lo, x, y, plotW, plotH };
-  }, [spark, live.forecasts, live.signal.target_px, now]);
+    return { tMin, tMax, vis, lo, hi, x, y, plotW, plotH };
+  }, [spark, live.forecasts, live.signal.target_px, live15, live30, now]);
 
   if (spark.length < 2) {
     return (
       <section className="rounded-xl border border-line bg-card px-5 py-4">
-        <div className="text-[11px] tracking-[0.16em] text-muted">PRIX LIVE · BTC-USD · 1s</div>
-        <div className="mt-8 text-sm text-muted">Reconstruction des barres 1s Coinbase…</div>
+        <div className="text-[11px] tracking-[0.16em] text-muted">PRIX LIVE · BTC-USD · 1m</div>
+        <div className="mt-8 text-sm text-muted">Chargement des bougies 1 minute Coinbase…</div>
       </section>
     );
   }
@@ -77,14 +81,16 @@ export function LiveChart({ live }: { live: LiveResponse }) {
   const tTicks = 6;
   const tVals = Array.from({ length: tTicks + 1 }, (_, i) => tMin + ((tMax - tMin) * i) / tTicks);
 
-  const pending5 = live.forecasts.find((f) => f.hit === null && f.horizon_s === 5);
-  const pending15 = live.forecasts.find((f) => f.hit === null && f.horizon_s === 15);
+  const pending15 = live.forecasts.find((f) => f.hit === null && f.horizon_s === 900);
+  const pending30 = live.forecasts.find((f) => f.hit === null && f.horizon_s === 1800);
+  const goldPath = pending15?.path?.length ? pending15.path : live15;
+  const palePath = pending30?.path?.length ? pending30.path : live30;
   const resolved = [
-    ...live.forecasts.filter((f) => f.hit !== null && f.horizon_s === 5).slice(0, 20),
-    ...live.forecasts.filter((f) => f.hit !== null && f.horizon_s === 15).slice(0, 12),
+    ...live.forecasts.filter((f) => f.hit !== null && f.horizon_s === 900).slice(0, 16),
+    ...live.forecasts.filter((f) => f.hit !== null && f.horizon_s === 1800).slice(0, 8),
   ];
 
-  const candleW = vis.length > 1 ? Math.max(1.1, Math.min(4.2, (x(vis[1].t) - x(vis[0].t)) * 0.72)) : 2;
+  const candleW = vis.length > 1 ? Math.max(1.4, Math.min(5.5, (x(vis[1].t) - x(vis[0].t)) * 0.72)) : 3;
 
   const onMove = (ev: MouseEvent<SVGSVGElement>) => {
     const svg = ev.currentTarget;
@@ -103,27 +109,27 @@ export function LiveChart({ live }: { live: LiveResponse }) {
     if (best) setHover({ t: best.t, p: best.p });
   };
 
+  const hours = Math.max(1, Math.round((now - (vis[0]?.t ?? now)) / 3600_000));
+
   return (
     <section className="rounded-xl border border-line bg-card px-4 py-4 sm:px-5">
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <div className="text-[11px] tracking-[0.16em] text-muted">PRIX LIVE · BTC-USD · BOUGIES 1s</div>
+          <div className="text-[11px] tracking-[0.16em] text-muted">PRIX LIVE · BTC-USD · BOUGIES 1 MINUTE</div>
           <div className="mt-1 text-[12px] text-white/70">
-            Coinbase · ~{Math.round((now - (vis[0]?.t ?? now)) / 1000)} s d’historique · curseur = maintenant
+            Coinbase · ~{hours} h d’historique · curseur = maintenant · chemin or = 15 min
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3 text-[10px] tracking-[0.12em] text-muted">
           <span className="inline-flex items-center gap-1">
-            <span className="h-px w-4 border-t-2 border-dashed border-gold" /> OR = prévu
+            <span className="h-px w-4 border-t-2 border-dashed border-gold" /> OR = prévu 15m
           </span>
+          <span className="inline-flex items-center gap-1 text-gold/70">30m pâle</span>
           <span className="inline-flex items-center gap-1">
             <span className="h-[3px] w-3 rounded-sm bg-up" /> VERT = match
           </span>
           <span className="inline-flex items-center gap-1">
             <span className="h-[3px] w-3 rounded-sm bg-down" /> ROUGE = raté
-          </span>
-          <span className="inline-flex items-center gap-1 text-gold/70">
-            15s pâle = tête, pas le paper 5s
           </span>
         </div>
       </div>
@@ -132,7 +138,7 @@ export function LiveChart({ live }: { live: LiveResponse }) {
         viewBox={`0 0 ${W} ${H}`}
         className="mt-2 h-[340px] w-full sm:h-[400px]"
         role="img"
-        aria-label="Prix Bitcoin Coinbase BTC-USD avec trajectoire prévue"
+        aria-label="Prix Bitcoin Coinbase BTC-USD 1 minute avec trajectoire prévue 15 minutes"
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
       >
@@ -186,7 +192,6 @@ export function LiveChart({ live }: { live: LiveResponse }) {
           </text>
         ))}
 
-        {/* future band */}
         <rect
           x={x(now)}
           y={PAD.t}
@@ -234,7 +239,7 @@ export function LiveChart({ live }: { live: LiveResponse }) {
         {resolved.map((f) => {
           if (f.path.length < 2) return null;
           const col = colorOf(f);
-          const faint = f.horizon_s === 15;
+          const faint = f.horizon_s === 1800;
           return (
             <path
               key={`r-${f.ts}-${f.horizon_s}`}
@@ -248,22 +253,22 @@ export function LiveChart({ live }: { live: LiveResponse }) {
           );
         })}
 
-        {pending15 && pending15.path.length > 1 && (
+        {palePath.length > 1 && (
           <path
-            d={poly(pending15.path, x, y)}
+            d={poly(palePath, x, y)}
             fill="none"
             stroke="#c8a46a"
             strokeWidth="1.4"
             strokeDasharray="3 5"
-            strokeOpacity="0.45"
+            strokeOpacity="0.4"
             strokeLinecap="round"
           />
         )}
 
-        {pending5 && pending5.path.length > 1 && (
+        {goldPath.length > 1 && (
           <g filter="url(#goldGlow)">
             <path
-              d={poly(pending5.path, x, y)}
+              d={poly(goldPath, x, y)}
               fill="none"
               stroke="#c8a46a"
               strokeWidth="2.4"
@@ -271,19 +276,20 @@ export function LiveChart({ live }: { live: LiveResponse }) {
               strokeLinecap="round"
             />
             <circle
-              cx={x(pending5.path[pending5.path.length - 1].t)}
-              cy={y(pending5.target_px)}
+              cx={x(goldPath[goldPath.length - 1].t)}
+              cy={y(goldPath[goldPath.length - 1].p)}
               r="4.5"
               fill="#c8a46a"
             />
             <text
-              x={x(pending5.path[pending5.path.length - 1].t) + 8}
-              y={y(pending5.target_px) - 8}
+              x={x(goldPath[goldPath.length - 1].t) + 8}
+              y={y(goldPath[goldPath.length - 1].p) - 8}
               fill="#c8a46a"
               fontSize="11"
               fontFamily="IBM Plex Mono, ui-monospace, monospace"
             >
-              {nfPrice.format(pending5.target_px)} · {nfBps.format(pending5.expected_move_bps)} bps
+              {nfPrice.format(goldPath[goldPath.length - 1].p)} ·{" "}
+              {nfBps.format(live.signal.expected_move_bps)} bps · 15m
             </text>
           </g>
         )}
