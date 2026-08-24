@@ -16,6 +16,13 @@ export type Signal = {
   gate_block?: "prob" | "move" | null;
 };
 
+export type HeadPoint = {
+  horizon_m: number;
+  p_up: number;
+  expected_move_bps: number;
+  expected_abs_bps: number;
+};
+
 export type WhyFeature = {
   key: string;
   label: string;
@@ -78,6 +85,8 @@ export type PaperRow = {
 
 export type PaperMode = "taker" | "maker";
 
+export type FeeLink = { label: string; href: string };
+
 export type Paper = {
   n: number;
   hits: number;
@@ -97,13 +106,21 @@ export type Paper = {
   min_move_bps?: number;
   n_cancelled?: number;
   fee_tier?: string;
+  fee_schedule_id?: string;
+  fee_product?: string;
+  fee_caveat?: string;
+  fee_links?: FeeLink[];
+  fee_alternate?: string;
   taker_fee_bps?: number;
   maker_fee_bps?: number;
+  maker_rt_bps?: number;
+  taker_rt_bps?: number;
   round_trip_fee_bps?: number;
   persisted?: boolean;
   store?: "blobs" | "file";
   started_ts?: number;
   updated_ts?: number;
+  live_orders?: boolean;
   open_position?: {
     side: "up" | "down";
     label: "HAUSSIER" | "BAISSIER";
@@ -120,6 +137,9 @@ export type LiveResponse = {
   book: Book;
   spark: SparkPoint[];
   forecasts: Forecast[];
+  heads?: HeadPoint[];
+  path15?: PathPoint[];
+  path30?: PathPoint[];
   why: WhyFeature[];
   paper: Paper;
   error: string | null;
@@ -137,14 +157,25 @@ export type LiveResponse = {
     coverage: number;
     naive_last_acc: number;
     mean_abs_move_bps?: number | null;
+    all_test_mean_abs_bps?: number | null;
+    expectancy_maker_rt?: number | null;
+    expectancy_taker_rt?: number | null;
     expectancy_1bp?: number | null;
     expectancy_2bp?: number | null;
+    note?: string;
   };
-  swapped_live?: boolean | null;
-  coinbase_train?: {
-    n_days?: number;
-    kept_previous_live?: boolean;
-    test?: LiveResponse["test"];
+  train_n_days?: number | null;
+  train_n_bars?: number | null;
+  fee?: {
+    product: string;
+    schedule: string;
+    taker_bps: number;
+    maker_bps: number;
+    maker_rt_bps: number;
+    taker_rt_bps: number;
+    caveat: string;
+    links: FeeLink[];
+    alternate: string;
   };
 };
 
@@ -197,14 +228,15 @@ export function fmtClock(ts: number): string {
   return new Date(ts).toLocaleTimeString("fr-FR", {
     hour: "2-digit",
     minute: "2-digit",
-    second: "2-digit",
     hour12: false,
   });
 }
 
 export function fmtCd(s: number): string {
   const x = Math.max(0, Math.round(s));
-  return `0:${String(x).padStart(2, "0")}`;
+  const m = Math.floor(x / 60);
+  const sec = x % 60;
+  return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
 export function signalColor(label: Signal["label"]): string {

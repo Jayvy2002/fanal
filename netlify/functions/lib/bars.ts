@@ -1,164 +1,91 @@
 import {
+  fetchBook,
+  fetchCandles1m,
+  fetchStats,
   fetchTicker,
   fetchTrades,
-  fetchBook,
-  fetchStats,
   parseTradeTime,
   type CoinbaseBook,
+  type CoinbaseCandle,
   type CoinbaseStats,
   type CoinbaseTicker,
   type CoinbaseTrade,
   type Kline,
 } from "./coinbase";
 
-const SEC = 1000;
-const MAX_BARS = 360;
-const SEED_PAGES = 7;
+const BAR_MS = 60_000;
+const LOOKBACK_BARS = 240; /* ~4 h de 1m */
 
 export type Bar = Kline;
 
-type Store = {
-  bars: Map<number, Bar>;
-  seen: Set<number>;
-  lastTradeId: number;
-  seeded: boolean;
-  seeding: Promise<void> | null;
-};
-
-const store: Store = {
-  bars: new Map(),
-  seen: new Set(),
-  lastTradeId: 0,
-  seeded: false,
-  seeding: null,
-};
-
-function bucket(ms: number): number {
-  return Math.floor(ms / SEC) * SEC;
+function candleToBar(c: CoinbaseCandle): Bar {
+  const t = Math.floor(c[0]) * 1000;
+  return {
+    t,
+    o: c[3],
+    h: c[2],
+    l: c[1],
+    c: c[4],
+    v: c[5],
+    n: 0,
+    tb: 0,
+  };
 }
 
-function upsertTrade(tr: CoinbaseTrade): void {
-  const px = +tr.price;
-  const sz = +tr.size;
-  if (!Number.isFinite(px) || px <= 0) return;
-  const t = bucket(parseTradeTime(tr.time));
-  // Coinbase Exchange `side` is the MAKER. Taker buy = maker sell.
-  const takerBuy = tr.side === "sell";
-  const prev = store.bars.get(t);
-  if (!prev) {
-    store.bars.set(t, {
-      t,
-      o: px,
-      h: px,
-      l: px,
-      c: px,
-      v: Number.isFinite(sz) ? sz : 0,
-      n: 1,
-      tb: takerBuy && Number.isFinite(sz) ? sz : 0,
-    });
-    return;
-  }
-  prev.h = Math.max(prev.h, px);
-  prev.l = Math.min(prev.l, px);
-  prev.c = px;
-  if (Number.isFinite(sz)) {
-    prev.v += sz;
-    if (takerBuy) prev.tb += sz;
-  }
-  prev.n += 1;
+function bucket1m(ms: number): number {
+  return Math.floor(ms / BAR_MS) * BAR_MS;
 }
 
-function trimSeen(): void {
-  if (store.seen.size <= 20_000) return;
-  const ids = [...store.seen].sort((a, b) => a - b);
-  for (let i = 0; i < 8_000; i++) store.seen.delete(ids[i]);
-}
-
-function ingestTrades(trades: CoinbaseTrade[]): void {
-  // Coinbase returns newest-first. Ingest oldest-first so OHLC opens correctly.
+/** Overlay taker-buy depuis les trades récents (side = maker ; taker buy = sell). */
+function applyTrades(bars: Map<number, Bar>, trades: CoinbaseTrade[]): void {
   for (let i = trades.length - 1; i >= 0; i--) {
     const tr = trades[i];
-    if (store.seen.has(tr.trade_id)) continue;
-    store.seen.add(tr.trade_id);
-    upsertTrade(tr);
+    const px = +tr.price;
+    const sz = +tr.size;
+    if (!Number.isFinite(px) || px <= 0 || !Number.isFinite(sz)) continue;
+    const t = bucket1m(parseTradeTime(tr.time));
+    const bar = bars.get(t);
+    if (!bar) continue;
+    const takerBuy = tr.side === "sell";
+    bar.n += 1;
+    if (takerBuy) bar.tb += sz;
   }
-  if (trades.length) {
-    const newest = Math.max(...trades.map((t) => t.trade_id));
-    if (newest > store.lastTradeId) store.lastTradeId = newest;
-  }
-  trimSeen();
-  prune();
 }
 
-function ingestTicker(ticker: CoinbaseTicker): void {
-  const px = +ticker.price;
-  if (!Number.isFinite(px) || px <= 0) return;
-  const t = bucket(parseTradeTime(ticker.time) || Date.now());
-  const prev = store.bars.get(t);
-  if (!prev) {
-    store.bars.set(t, { t, o: px, h: px, l: px, c: px, v: 0, n: 0, tb: 0 });
-    prune();
-    return;
-  }
-  prev.h = Math.max(prev.h, px);
-  prev.l = Math.min(prev.l, px);
-  prev.c = px;
-}
-
-function prune(): void {
-  if (store.bars.size <= MAX_BARS) return;
-  const times = [...store.bars.keys()].sort((a, b) => a - b);
-  const drop = times.length - MAX_BARS;
-  for (let i = 0; i < drop; i++) store.bars.delete(times[i]);
-}
-
-/** Barre 1s [t, t+1000) complète seulement si now >= t+1000. */
-export function isBarComplete(t: number, nowMs: number): boolean {
-  return t + SEC <= nowMs;
-}
-
-export function completedKlines(klines: Kline[], nowMs: number): Kline[] {
-  return klines.filter((k) => isBarComplete(k.t, nowMs));
-}
-
-function densify(from: number, to: number): Bar[] {
+function densify(sorted: Bar[]): Bar[] {
+  if (sorted.length < 2) return sorted.map((b) => ({ ...b }));
   const out: Bar[] = [];
-  let prev: Bar | null = null;
-  for (let t = from; t <= to; t += SEC) {
-    const hit = store.bars.get(t);
-    if (hit) {
-      prev = { ...hit };
-      out.push(prev);
-      continue;
+  let prev = { ...sorted[0] };
+  out.push(prev);
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i];
+    for (let t = prev.t + BAR_MS; t < next.t; t += BAR_MS) {
+      const carried: Bar = {
+        t,
+        o: prev.c,
+        h: prev.c,
+        l: prev.c,
+        c: prev.c,
+        v: 0,
+        n: 0,
+        tb: 0,
+      };
+      out.push(carried);
+      prev = carried;
     }
-    if (!prev) continue;
-    const carried: Bar = {
-      t,
-      o: prev.c,
-      h: prev.c,
-      l: prev.c,
-      c: prev.c,
-      v: 0,
-      n: 0,
-      tb: 0,
-    };
-    out.push(carried);
-    prev = carried;
+    prev = { ...next };
+    out.push(prev);
   }
   return out;
 }
 
-async function seedHistory(): Promise<void> {
-  if (store.seeded) return;
-  let after: number | undefined;
-  for (let page = 0; page < SEED_PAGES; page++) {
-    const trades = await fetchTrades(1000, after);
-    if (!trades.length) break;
-    ingestTrades(trades);
-    after = trades[trades.length - 1].trade_id;
-  }
-  store.seeded = true;
-  prune();
+/** Barre 1m [t, t+60000) complète seulement si now >= t+60000. */
+export function isBarComplete(t: number, nowMs: number): boolean {
+  return t + BAR_MS <= nowMs;
+}
+
+export function completedKlines(klines: Kline[], nowMs: number): Kline[] {
+  return klines.filter((k) => isBarComplete(k.t, nowMs));
 }
 
 export type Snapshot = {
@@ -171,31 +98,34 @@ export type Snapshot = {
 };
 
 export async function snapshotLive(): Promise<Snapshot> {
-  if (!store.seeded && !store.seeding) {
-    store.seeding = seedHistory().finally(() => {
-      store.seeding = null;
-    });
-  }
-  const [ticker, stats, book, trades] = await Promise.all([
+  const [candles, ticker, stats, book, trades] = await Promise.all([
+    fetchCandles1m(LOOKBACK_BARS + 12),
     fetchTicker(),
     fetchStats(),
     fetchBook(2),
     fetchTrades(1000),
   ]);
-  if (store.seeding) await store.seeding;
-
-  ingestTrades(trades);
-  ingestTicker(ticker);
 
   const last = +ticker.price;
   const now = parseTradeTime(ticker.time) || Date.now();
-  const times = [...store.bars.keys()].sort((a, b) => a - b);
-  const to = bucket(now);
-  const from = times.length ? times[0] : to - 180_000;
-  const klines = densify(from, to);
+  const byT = new Map<number, Bar>();
+  for (const c of candles) {
+    const b = candleToBar(c);
+    if (b.c > 0 && Number.isFinite(b.c)) byT.set(b.t, b);
+  }
+  applyTrades(byT, trades);
+
+  const times = [...byT.keys()].sort((a, b) => a - b);
+  const raw = times.map((t) => byT.get(t)!);
+  let klines = densify(raw);
+  if (klines.length > LOOKBACK_BARS + 2) {
+    klines = klines.slice(-(LOOKBACK_BARS + 2));
+  }
   return { klines, ticker, stats, book, now, last };
 }
 
 export function barCount(): number {
-  return store.bars.size;
+  return 0;
 }
+
+export { BAR_MS, LOOKBACK_BARS };

@@ -3,8 +3,7 @@ import { buildLive } from "./lib/engine";
 
 /**
  * Cron Netlify 1 min : avance le paper (flatten / expire) sans onglet au premier plan.
- * Résolution 5s = toujours le poll UI 1s. Sans ce tick, un 24 h paper se fige
- * dès que l’onglet est en arrière-plan (Netlify n’a pas de cron à 1s).
+ * La barre live est déjà 1 m — le cron correspond à la granularité.
  * Aucun ordre Coinbase réel. Aucune clé.
  */
 export const handler = async () => {

@@ -1,12 +1,18 @@
 import {
   CLIP_USD,
+  DEFAULT_FEE_SCHEDULE,
+  FEE_SCHEDULES,
   FEE_TIER_LABEL,
   HORIZON_MS,
+  HORIZON_S,
+  LEDGER_VERSION,
   MAKER_FEE_BPS,
+  MAKER_RT_BPS,
   MAX_RECENT,
   PAPER_MIN_MOVE_BPS,
   STARTING_CASH_USD,
   TAKER_FEE_BPS,
+  TAKER_RT_BPS,
   feeUsd,
   roundTripFeeBps,
   type FillRole,
@@ -31,9 +37,9 @@ export type MarketPx = {
   bars?: MarketBar[];
 };
 
-function emptyLedger(now: number, mode: PaperMode = "taker"): Ledger {
+function emptyLedger(now: number, mode: PaperMode = "maker"): Ledger {
   return {
-    v: 1,
+    v: LEDGER_VERSION,
     started_ts: now,
     updated_ts: now,
     mode,
@@ -358,8 +364,8 @@ function cancelEntry(led: Ledger, order: PaperOrder, now: number): void {
 function canEnter(led: Ledger, signal: Signal, m: MarketPx): boolean {
   if (led.open || led.pending) return false;
   if (!signal.gated || signal.side === "flat") return false;
-  /* Paper = tête 5s uniquement. Un feu 15s ne doit pas ouvrir une position. */
-  if ((signal.horizon_s ?? 5) !== HORIZON_MS / 1000) return false;
+  /* Paper = tête 15 m uniquement. Un feu 1s/5s ne doit pas ouvrir une position. */
+  if ((signal.horizon_s ?? 0) !== HORIZON_S) return false;
   const minMove = signal.min_move_bps ?? led.min_move_bps;
   if (!(Math.abs(signal.expected_move_bps) >= minMove - 1e-12)) return false;
   if (led.last_entry_attempt_ts > 0 && m.now - led.last_entry_attempt_ts < HORIZON_MS - 200) {
@@ -522,13 +528,21 @@ export function viewPaper(led: Ledger, m: MarketPx, kind: StoreKind): Paper {
     min_move_bps: led.min_move_bps,
     n_cancelled: led.n_cancelled,
     fee_tier: FEE_TIER_LABEL,
+    fee_schedule_id: DEFAULT_FEE_SCHEDULE.id,
+    fee_product: DEFAULT_FEE_SCHEDULE.product,
+    fee_caveat: DEFAULT_FEE_SCHEDULE.caveat,
+    fee_links: DEFAULT_FEE_SCHEDULE.links,
+    fee_alternate: `${FEE_SCHEDULES.exchange_60_40.label} : ${FEE_SCHEDULES.exchange_60_40.taker_bps}/${FEE_SCHEDULES.exchange_60_40.maker_bps} bp`,
     taker_fee_bps: TAKER_FEE_BPS,
     maker_fee_bps: MAKER_FEE_BPS,
+    maker_rt_bps: MAKER_RT_BPS,
+    taker_rt_bps: TAKER_RT_BPS,
     round_trip_fee_bps: roundTripFeeBps(led.mode),
     persisted: true,
     store: kind,
     started_ts: led.started_ts,
     updated_ts: led.updated_ts,
+    live_orders: false,
     open_position: led.open
       ? {
           side: led.open.side,
@@ -539,19 +553,21 @@ export function viewPaper(led: Ledger, m: MarketPx, kind: StoreKind): Paper {
         }
       : null,
     honest:
-      "Aucun ordre Coinbase réel. Frais palier 0–10 k$ US (preneur 60 bp / faiseur 40 bp). " +
-      "Aller-retour preneur = 120 bp, très au-dessus du |move| 5s typique (~1 bp) : le paper preneur devrait perdre. " +
-      "Hit = direction mid/fill sans frais ; le PnL $ soustrait les deux jambes de frais. " +
-      "Faiseur = trade-through (pas un touch). Short = notionnel virtuel. " +
-      "Un jour vert ici voudrait dire qu’on peut parler live — pas avant.",
+      "Pas d’ordres live. Frais défaut = Advanced Trade intro non vérifié (preneur 120 bp / faiseur 60 bp ; " +
+      "RT faiseur 120 bp, RT preneur 240 bp). Alternate nommée : Exchange 60/40. " +
+      "Le |move| 15 m BTC est souvent bien sous 120 bp : un feu (et donc un fill) peut rester rare. " +
+      "Hit = direction mid/fill sans frais ; le PnL $ soustrait les deux jambes. " +
+      "Faiseur = trade-through sur barres 1 m postérieures au placement (minute en cours ignorée). " +
+      "Short = notionnel virtuel. Un jour vert voudrait dire qu’on peut parler live — pas avant.",
   };
 }
 
 function hydrate(loaded: Awaited<ReturnType<typeof loadLedger>>, now: number): Ledger {
-  if (loaded.ledger && loaded.ledger.v === 1) {
+  if (loaded.ledger && loaded.ledger.v === LEDGER_VERSION) {
     if (typeof loaded.ledger.mark_px !== "number") loaded.ledger.mark_px = 0;
     return loaded.ledger;
   }
+  /* v1 (paper 5s) et tout schéma inconnu : nouveau carnet, pas de continuité. */
   return emptyLedger(now);
 }
 
@@ -561,7 +577,7 @@ async function transact(mut: (led: Ledger) => void): Promise<{ ledger: Ledger; k
   let last: { ledger: Ledger; kind: StoreKind } | null = null;
   for (let i = 0; i < 6; i++) {
     const loaded = await loadLedger();
-    const created = !(loaded.ledger && loaded.ledger.v === 1);
+    const created = !(loaded.ledger && loaded.ledger.v === LEDGER_VERSION);
     const led = hydrate(loaded, Date.now());
     const before = fingerprint(led);
     mut(led);
@@ -625,7 +641,7 @@ export async function snapshotPaper(m?: MarketPx): Promise<Paper> {
   );
 }
 
-export function newLedger(now: number, mode: PaperMode = "taker"): Ledger {
+export function newLedger(now: number, mode: PaperMode = "maker"): Ledger {
   return emptyLedger(now, mode);
 }
 

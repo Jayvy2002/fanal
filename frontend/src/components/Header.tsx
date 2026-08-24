@@ -31,7 +31,7 @@ export function Header({
         <Shield />
         <div>
           <div className="text-[15px] font-semibold tracking-[0.22em] text-white">FANAL</div>
-          <div className="text-[11px] tracking-wide text-muted">prédiction 5s · BTC-USD · Coinbase</div>
+          <div className="text-[11px] tracking-wide text-muted">prédiction 15 min · BTC-USD · Coinbase</div>
         </div>
       </div>
       <div className="flex items-baseline justify-center gap-3">
@@ -44,10 +44,9 @@ export function Header({
       </div>
       <div className="flex justify-end">
         <div className="rounded-full border border-gold/50 px-3 py-1 font-mono text-[11px] tracking-wide text-gold">
-          LIGHTGBM · τ {nfPrice.format(tau)} · ≥ {nfPrice.format(minMoveBps)} bp
+          LIGHTGBM 1m · τ {nfPrice.format(tau)} · ≥ {nfPrice.format(minMoveBps)} bp
         </div>
       </div>
     </header>
   );
 }
-

@@ -1,13 +1,24 @@
 import { snapshotLive, completedKlines } from "./bars";
 import { bookFromDepth } from "./book";
-import { COINBASE_PRODUCT, fetchBook, fetchStats, fetchTicker, parseTradeTime } from "./coinbase";
-import { computeFeatureMap, retBps, rvWindow, sparkFrom, vectorFromMap, whyStrip } from "./features";
-import { expectedAbsMoveBps, expectedMoveBps, updateForecasts } from "./forecasts";
+import { COINBASE_PRODUCT, fetchStats, fetchTicker, parseTradeTime } from "./coinbase";
+import { computeFeatureMap, retBps, rvWindow, sparkFrom, vectorFromMap, whyStrip, WARMUP_BARS } from "./features";
+import {
+  expectedAbsMoveBps,
+  expectedMoveBps,
+  pathFromHeads,
+  updateForecasts,
+} from "./forecasts";
+import {
+  DEFAULT_FEE_SCHEDULE,
+  FEE_SCHEDULES,
+  HORIZON_S,
+  MAKER_RT_BPS,
+  TAKER_RT_BPS,
+  type PaperMode,
+} from "./paperFees";
 import { paperStoreKind, snapshotPaper, stepPaper, setPaperMode, type MarketPx } from "./paper";
-import type { PaperMode } from "./paperFees";
-import { getMeta, getMeta15, is15Enabled, predictPUp, predictPUp15, verifySanity } from "./scorer";
-import type { HealthResponse, LiveResponse, Signal, SparkPoint, TickerResponse } from "./types";
-import { adaptLiveFeatures } from "./venue";
+import { getHeadCalib, getMeta, listHorizons, predictPUpAt, verifySanity } from "./scorer";
+import type { HeadPoint, HealthResponse, LiveResponse, PathPoint, Signal, TickerResponse } from "./types";
 
 let sanityChecked = false;
 
@@ -26,12 +37,13 @@ function makeSignal(
   close: number,
   horizonS: number,
   tau: number,
-  calib: ReturnType<typeof getMeta>["calib"],
+  calib: ReturnType<typeof getHeadCalib>,
   minMoveBps: number,
   map?: Record<string, number>,
+  horizonM = 15,
 ): Signal {
-  const absMove = expectedAbsMoveBps(pUp, calib, map);
-  const move = expectedMoveBps(pUp, calib, map);
+  const absMove = expectedAbsMoveBps(pUp, calib, map, horizonM);
+  const move = expectedMoveBps(pUp, calib, map, horizonM);
   const probUp = pUp >= tau;
   const probDown = pUp <= 1 - tau;
   const probGated = probUp || probDown;
@@ -43,22 +55,22 @@ function makeSignal(
   let why: string;
   if (!probGated) {
     gate_block = "prob";
-    why = `P(↑) entre 1−τ ${fmtP(1 - tau)} et τ ${fmtP(tau)} — pas de signal`;
+    why = `P(↑ ${horizonM}m) entre 1−τ ${fmtP(1 - tau)} et τ ${fmtP(tau)} — pas de signal`;
   } else if (!moveGated) {
     gate_block = "move";
-    why = `|move| prévu ${fmtP(absMove)} bp < ${fmtP(minMoveBps)} bp — NEUTRE (coût ~1 bp)`;
+    why =
+      `|move| prévu ${horizonM}m ${fmtP(absMove)} bp < aller-retour faiseur ${fmtP(minMoveBps)} bp — NEUTRE`;
   } else if (probUp) {
     label = "HAUSSIER";
     side = "up";
     gated = true;
-    why = `P(↑) ${fmtP(pUp)} ≥ τ ${fmtP(tau)} et |move| ${fmtP(absMove)} ≥ ${fmtP(minMoveBps)} bp`;
+    why = `P(↑ ${horizonM}m) ${fmtP(pUp)} ≥ τ ${fmtP(tau)} et |move| ${fmtP(absMove)} ≥ ${fmtP(minMoveBps)} bp`;
   } else {
     label = "BAISSIER";
     side = "down";
     gated = true;
-    why = `P(↑) ${fmtP(pUp)} ≤ 1−τ ${fmtP(1 - tau)} et |move| ${fmtP(absMove)} ≥ ${fmtP(minMoveBps)} bp`;
+    why = `P(↑ ${horizonM}m) ${fmtP(pUp)} ≤ 1−τ ${fmtP(1 - tau)} et |move| ${fmtP(absMove)} ≥ ${fmtP(minMoveBps)} bp`;
   }
-  /* Belt: never report gated if |move| < min (train/serve formula must agree). */
   if (gated && absMove < minMoveBps - 1e-12) {
     gated = false;
     side = "flat";
@@ -84,16 +96,16 @@ function makeSignal(
   };
 }
 
-function markSpark(spark: SparkPoint[], forecasts: LiveResponse["forecasts"]): SparkPoint[] {
-  const marks: { t: number; side: SparkPoint["side"] }[] = [];
+function markSpark(spark: ReturnType<typeof sparkFrom>, forecasts: LiveResponse["forecasts"]) {
+  const marks: { t: number; side: (typeof spark)[0]["side"] }[] = [];
   for (const f of forecasts) {
-    if (f.horizon_s !== 5) continue;
+    if (f.horizon_s !== HORIZON_S) continue;
     marks.push({ t: f.ts, side: f.side });
   }
   if (!marks.length) return spark;
   return spark.map((pt) => {
-    let best: SparkPoint["side"] = pt.side;
-    let bestD = 1500;
+    let best: (typeof spark)[0]["side"] = pt.side;
+    let bestD = 90_000;
     for (const m of marks) {
       const d = Math.abs(pt.t - m.t);
       if (d < bestD) {
@@ -101,7 +113,7 @@ function markSpark(spark: SparkPoint[], forecasts: LiveResponse["forecasts"]): S
         best = m.side;
       }
     }
-    return bestD < 1500 ? { ...pt, side: best } : pt;
+    return bestD < 90_000 ? { ...pt, side: best } : pt;
   });
 }
 
@@ -116,14 +128,70 @@ function emptyBook() {
   };
 }
 
+function feeBlock() {
+  const s = DEFAULT_FEE_SCHEDULE;
+  const alt = FEE_SCHEDULES.exchange_60_40;
+  return {
+    product: s.product,
+    schedule: s.label,
+    taker_bps: s.taker_bps,
+    maker_bps: s.maker_bps,
+    maker_rt_bps: MAKER_RT_BPS,
+    taker_rt_bps: TAKER_RT_BPS,
+    caveat: s.caveat,
+    links: s.links,
+    alternate: `${alt.label} : ${alt.taker_bps}/${alt.maker_bps} bp`,
+  };
+}
+
+function emptyLive(error: string | null, paper: Awaited<ReturnType<typeof snapshotPaper>>): LiveResponse {
+  const meta = getMeta();
+  const tau = meta.tau ?? 0.58;
+  const minMove = meta.min_move_bps ?? MAKER_RT_BPS;
+  const signal = makeSignal(0.5, 0, HORIZON_S, tau, meta.calib, minMove);
+  return {
+    signal,
+    flux: { ...signal, ret_5_bps: null, rv_60: null },
+    book: emptyBook(),
+    spark: [],
+    forecasts: [],
+    heads: [],
+    path15: [],
+    path30: [],
+    why: [],
+    paper,
+    error,
+    kind: "lgbm",
+    horizon_s: HORIZON_S,
+    bar_s: 60,
+    tau,
+    min_move_bps: minMove,
+    now: Date.now(),
+    venue: "coinbase",
+    product: "BTC-USD",
+    test: {
+      ...meta.test,
+      mean_abs_move_bps:
+        meta.test.mean_abs_move_bps ?? meta.test.all_test_mean_abs_bps ?? null,
+    },
+    train_n_days: meta.n_days ?? null,
+    train_n_bars: meta.n_bars ?? null,
+    fee: feeBlock(),
+  };
+}
+
 export async function buildLive(): Promise<LiveResponse> {
   ensureSanity();
   const meta = getMeta();
-  const tau = meta.tau;
-  const minMove = meta.min_move_bps ?? meta.calib?.min_move_bps ?? 1.0;
-  const test = meta.test;
-  let error: string | null = null;
-  const calib = meta.calib;
+  const tau = meta.tau ?? 0.58;
+  const minMove = meta.min_move_bps ?? MAKER_RT_BPS;
+    const test = {
+      ...meta.test,
+      mean_abs_move_bps:
+        meta.test.mean_abs_move_bps ?? meta.test.all_test_mean_abs_bps ?? null,
+    };
+  const calib15 = getHeadCalib(15) ?? meta.calib;
+  const fee = feeBlock();
 
   try {
     const snap = await snapshotLive();
@@ -137,32 +205,36 @@ export async function buildLive(): Promise<LiveResponse> {
 
     let signal: Signal;
     let rawMap: Record<string, number> = {};
-    let modelMap: Record<string, number> = {};
-    if (featBars.length >= 61) {
-      rawMap = computeFeatureMap(featBars);
-      modelMap = adaptLiveFeatures(rawMap, meta.train_archive);
-      const names = meta.features?.length ? meta.features : Object.keys(modelMap);
-      const x = vectorFromMap(modelMap, names);
-      const pUp = predictPUp(x);
-      signal = makeSignal(pUp, mid, 5, tau, calib, minMove, modelMap);
+    const heads: HeadPoint[] = [];
+    if (featBars.length >= WARMUP_BARS) {
+      rawMap = computeFeatureMap(featBars, { obi_10: book.obi_10 });
+      const names = meta.features?.length ? meta.features : Object.keys(rawMap);
+      const x = vectorFromMap(rawMap, names);
+      for (const hm of listHorizons()) {
+        const p = predictPUpAt(x, hm);
+        const cal = getHeadCalib(hm);
+        const abs = expectedAbsMoveBps(p, cal, rawMap, hm);
+        const signed = expectedMoveBps(p, cal, rawMap, hm);
+        heads.push({ horizon_m: hm, p_up: p, expected_move_bps: signed, expected_abs_bps: abs });
+      }
+      const p15 = heads.find((h) => h.horizon_m === 15)?.p_up ?? predictPUpAt(x, 15);
+      signal = makeSignal(p15, mid, HORIZON_S, tau, calib15, minMove, rawMap, 15);
     } else {
-      signal = makeSignal(0.5, mid, 5, tau, calib, minMove);
-      signal.why = "amorçage Coinbase — reconstruction des barres 1s (barre courante exclue)";
+      signal = makeSignal(0.5, mid, HORIZON_S, tau, calib15, minMove, undefined, 15);
+      signal.why = "amorçage Coinbase — bougies 1m (minute en cours exclue)";
       signal.gated = false;
       signal.side = "flat";
       signal.label = "NEUTRE";
     }
 
-    let signal15: Signal | null = null;
-    if (is15Enabled() && featBars.length >= 61) {
-      const meta15 = getMeta15();
-      const names15 = meta15.features?.length ? meta15.features : meta.features;
-      const map15 = adaptLiveFeatures(rawMap, meta15.train_archive ?? meta.train_archive);
-      const x15 = vectorFromMap(map15, names15);
-      const p15 = predictPUp15(x15);
-      const min15 = meta15.min_move_bps ?? meta15.calib?.min_move_bps ?? minMove;
-      signal15 = makeSignal(p15, mid, 15, meta15.tau || tau, meta15.calib, min15, map15);
-    }
+    const p30 = heads.find((h) => h.horizon_m === 30)?.p_up ?? 0.5;
+    const calib30 = getHeadCalib(30);
+    const signal30 = heads.length
+      ? makeSignal(p30, mid, 30 * 60, tau, calib30, minMove, rawMap, 30)
+      : null;
+
+    const path15: PathPoint[] = heads.length ? pathFromHeads(mid, exchNow, heads, 15) : [];
+    const path30: PathPoint[] = heads.length ? pathFromHeads(mid, exchNow, heads, 30) : [];
 
     const lastBar = klines[klines.length - 1];
     const market: MarketPx = {
@@ -174,11 +246,18 @@ export async function buildLive(): Promise<LiveResponse> {
       last,
       low: lastBar?.l ?? last,
       high: lastBar?.h ?? last,
-      bars: klines.slice(-16).map((k) => ({ t: k.t, h: k.h, l: k.l })),
+      bars: klines.slice(-20).map((k) => ({ t: k.t, h: k.h, l: k.l })),
     };
     const paper = await stepPaper(market, signal);
-    const forecasts = updateForecasts({ now: exchNow, mid, signal5: signal, signal15 });
-    const spark = markSpark(sparkFrom(klines, 300), forecasts);
+    const forecasts = updateForecasts({
+      now: exchNow,
+      mid,
+      signal15: signal,
+      signal30,
+      path15,
+      path30,
+    });
+    const spark = markSpark(sparkFrom(klines, 180), forecasts);
     const ret5 = retBps(featBars.length ? featBars : klines, 5);
     const rv60 = rvWindow(featBars.length ? featBars : klines, 60);
     const why = whyStrip(rawMap, meta.importance, [{ key: "obi_10", value: book.obi_10 }]);
@@ -189,47 +268,28 @@ export async function buildLive(): Promise<LiveResponse> {
       book,
       spark,
       forecasts,
+      heads,
+      path15,
+      path30,
       why,
       paper,
-      error,
+      error: null,
       kind: "lgbm",
-      horizon_s: 5,
-      bar_s: 1,
+      horizon_s: HORIZON_S,
+      bar_s: 60,
       tau,
       min_move_bps: minMove,
       now: exchNow,
       venue: "coinbase",
       product: "BTC-USD",
       test,
-      swapped_live: meta.swapped_live ?? null,
-      coinbase_train: meta.coinbase_train,
+      train_n_days: meta.n_days ?? null,
+      train_n_bars: meta.n_bars ?? null,
+      fee,
     };
   } catch (err) {
-    error = err instanceof Error ? err.message : "live_error";
-    const close = 0;
-    const signal = makeSignal(0.5, close, 5, tau, calib, minMove);
-    const paper = await snapshotPaper();
-    return {
-      signal,
-      flux: { ...signal, ret_5_bps: null, rv_60: null },
-      book: emptyBook(),
-      spark: [],
-      forecasts: [],
-      why: [],
-      paper,
-      error,
-      kind: "lgbm",
-      horizon_s: 5,
-      bar_s: 1,
-      tau,
-      min_move_bps: minMove,
-      now: Date.now(),
-      venue: "coinbase",
-      product: "BTC-USD",
-      test,
-      swapped_live: meta.swapped_live ?? null,
-      coinbase_train: meta.coinbase_train,
-    };
+    const error = err instanceof Error ? err.message : "live_error";
+    return emptyLive(error, await snapshotPaper());
   }
 }
 
@@ -252,7 +312,7 @@ export async function buildTicker(): Promise<TickerResponse> {
 }
 
 export async function buildBook() {
-  const depth = await fetchBook(2);
+  const depth = await (await import("./coinbase")).fetchBook(2);
   return bookFromDepth(depth);
 }
 
@@ -261,10 +321,10 @@ export async function buildHealth(): Promise<HealthResponse> {
   return {
     ok: true,
     kind: "lgbm",
-    horizon_s: 5,
-    bar_s: 1,
+    horizon_s: HORIZON_S,
+    bar_s: 60,
     tau: meta.tau,
-    min_move_bps: meta.min_move_bps ?? meta.calib?.min_move_bps ?? 1.0,
+    min_move_bps: meta.min_move_bps ?? MAKER_RT_BPS,
     symbol: COINBASE_PRODUCT,
     venue: "coinbase",
     paper: await paperStoreKind(),

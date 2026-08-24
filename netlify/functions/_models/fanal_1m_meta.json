@@ -1,0 +1,696 @@
+{
+  "kind": "lgbm",
+  "horizon_s": 900,
+  "bar_s": 60,
+  "primary_horizon_m": 15,
+  "horizons_m": [
+    1,
+    3,
+    5,
+    10,
+    15,
+    30
+  ],
+  "symbol": "BTC-USD",
+  "train_archive": "coinbase_exchange_btc_usd_candles_1m",
+  "live_venue": "coinbase",
+  "live_product": "BTC-USD",
+  "tau": 0.58,
+  "min_move_bps": 120.0,
+  "features": [
+    "ret_1",
+    "ret_3",
+    "ret_5",
+    "ret_15",
+    "ret_30",
+    "ret_60",
+    "rv_5",
+    "rv_15",
+    "rv_30",
+    "rv_60",
+    "range_bps",
+    "body_ratio",
+    "upper_wick",
+    "lower_wick",
+    "log_hl",
+    "close_loc",
+    "vol_z_30",
+    "vol_z_60",
+    "log_vol",
+    "vol_shock_5",
+    "tbr",
+    "tbr_5",
+    "tbr_15",
+    "imb_5",
+    "imb_15",
+    "gap_up",
+    "gap_dn",
+    "gap_up_5",
+    "gap_dn_5",
+    "tod_sin",
+    "tod_cos",
+    "dow_sin",
+    "dow_cos",
+    "obi_10"
+  ],
+  "n_days": 90.0,
+  "n_bars": 129601,
+  "span_start": "2026-05-26T23:29:00+00:00",
+  "span_end": "2026-08-24T23:29:00+00:00",
+  "n_train": 90632,
+  "n_val": 19421,
+  "n_test": 19422,
+  "best_iteration": 4,
+  "val": {
+    "tau": 0.58,
+    "min_move_bps": 120.0,
+    "gated_acc": null,
+    "n": 0,
+    "coverage": 0.0,
+    "mean_abs_move_bps": null,
+    "mean_signed_bps": null,
+    "expectancy_maker_rt": null,
+    "expectancy_taker_rt": null,
+    "expectancy_1bp": null,
+    "expectancy_2bp": null,
+    "mean_e_abs_bps": null,
+    "note": "aucune barre gated \u2014 couverture nulle au seuil de frais"
+  },
+  "test": {
+    "tau": 0.58,
+    "min_move_bps": 120.0,
+    "gated_acc": null,
+    "n": 0,
+    "coverage": 0.0,
+    "mean_abs_move_bps": null,
+    "mean_signed_bps": null,
+    "expectancy_maker_rt": null,
+    "expectancy_taker_rt": null,
+    "expectancy_1bp": null,
+    "expectancy_2bp": null,
+    "mean_e_abs_bps": null,
+    "note": "aucune barre gated \u2014 couverture nulle au seuil de frais",
+    "naive_last_acc": 0.4929976315518484,
+    "ungated_tau_only": {
+      "gated_acc": null,
+      "n": 0,
+      "coverage": 0.0,
+      "mean_abs_move_bps": null,
+      "expectancy_maker_rt": null,
+      "expectancy_taker_rt": null
+    },
+    "all_test_mean_abs_bps": 12.971560807859616
+  },
+  "up_rate_test": 0.5109154566985892,
+  "sanity": [
+    {
+      "x": [
+        0.000170171012946696,
+        0.00020828457815191825,
+        0.00022990883858220457,
+        -0.00039964800406977474,
+        0.0018156652974692378,
+        0.001350498579936854,
+        7.390769948428155e-05,
+        0.0001086011497458971,
+        0.00034784140565285256,
+        0.0003056414596787785,
+        1.7046760695518923,
+        0.9981751824813799,
+        0.0009124087593100424,
+        0.0009124087593100424,
+        0.00017048211169084173,
+        0.9990875912406899,
+        -1.0791459236903849,
+        -0.822015135692896,
+        -1.8445694711235732,
+        0.26859023600622767,
+        0.5,
+        0.5,
+        0.5,
+        0.0,
+        0.0,
+        0.0,
+        7.279091245897799e-05,
+        0.00011851853695247189,
+        0.00011011958551488444,
+        0.14349262199117935,
+        -0.9896513868196702,
+        0.9749279121818236,
+        -0.22252093395631434,
+        0.0
+      ],
+      "p": 0.4882573954853689,
+      "raw": -0.04697905650777253,
+      "horizon_m": 15
+    },
+    {
+      "x": [
+        -0.00010938856168074551,
+        0.00023112657945567605,
+        0.0003020493557261972,
+        0.00024110222640771894,
+        0.0006621964493032095,
+        0.0014145583010964913,
+        0.00020781680010032312,
+        0.00024689251881336306,
+        0.00021187412214338747,
+        0.00020542325587481544,
+        1.2310782110223037,
+        0.8873417721519932,
+        0.0012658227850677755,
+        0.11139240506293906,
+        0.00012310193198327235,
+        0.11139240506293906,
+        -0.31056258886013455,
+        -0.3122388794791379,
+        0.3694829866515856,
+        0.5135327446953598,
+        0.5,
+        0.5,
+        0.5,
+        0.0,
+        0.0,
+        0.00021380244373690345,
+        0.0,
+        0.00021380244373690345,
+        0.00028844629982305254,
+        0.9855560590580777,
+        0.16934950384902475,
+        0.9749279121818236,
+        -0.22252093395631434,
+        0.0
+      ],
+      "p": 0.48882237952742447,
+      "raw": -0.044717932246867285,
+      "horizon_m": 15
+    },
+    {
+      "x": [
+        0.0002516169194599627,
+        -0.000601287046592347,
+        -0.0005341426391911597,
+        7.721844925434596e-05,
+        -0.00017156110039451278,
+        -0.0016061373953242253,
+        0.0005218750399991186,
+        0.0004942357808130039,
+        0.00040094408621991784,
+        0.00041823064259950525,
+        3.7274243180471878,
+        0.6749574105619673,
+        0.00034071550287261476,
+        0.32470187393516,
+        0.00037281187017675684,
+        0.9996592844971274,
+        -0.04889213099845548,
+        -0.3087021819160331,
+        0.7653300698591742,
+        1.0583943262200648,
+        0.5,
+        0.5,
+        0.5,
+        0.0,
+        0.0,
+        0.0008776909527093433,
+        0.0,
+        0.0010192949770575417,
+        0.0,
+        -0.1993679344171965,
+        0.9799247046208297,
+        0.7818314824680298,
+        0.6234898018587336,
+        0.0
+      ],
+      "p": 0.49095897187325693,
+      "raw": -0.03616805469558265,
+      "horizon_m": 15
+    }
+  ],
+  "importance": [
+    {
+      "name": "rv_60",
+      "gain": 247.97620010375977
+    },
+    {
+      "name": "ret_30",
+      "gain": 247.89849853515625
+    },
+    {
+      "name": "tod_sin",
+      "gain": 212.42230033874512
+    },
+    {
+      "name": "dow_sin",
+      "gain": 202.31199645996094
+    },
+    {
+      "name": "rv_30",
+      "gain": 102.09070205688477
+    },
+    {
+      "name": "ret_60",
+      "gain": 84.99009704589844
+    },
+    {
+      "name": "ret_15",
+      "gain": 72.33699798583984
+    },
+    {
+      "name": "tod_cos",
+      "gain": 58.415300369262695
+    },
+    {
+      "name": "gap_dn_5",
+      "gain": 29.50659942626953
+    },
+    {
+      "name": "rv_5",
+      "gain": 0.0
+    },
+    {
+      "name": "range_bps",
+      "gain": 0.0
+    },
+    {
+      "name": "body_ratio",
+      "gain": 0.0
+    },
+    {
+      "name": "rv_15",
+      "gain": 0.0
+    },
+    {
+      "name": "ret_3",
+      "gain": 0.0
+    },
+    {
+      "name": "ret_5",
+      "gain": 0.0
+    },
+    {
+      "name": "ret_1",
+      "gain": 0.0
+    },
+    {
+      "name": "close_loc",
+      "gain": 0.0
+    },
+    {
+      "name": "log_hl",
+      "gain": 0.0
+    },
+    {
+      "name": "lower_wick",
+      "gain": 0.0
+    },
+    {
+      "name": "upper_wick",
+      "gain": 0.0
+    },
+    {
+      "name": "vol_z_30",
+      "gain": 0.0
+    },
+    {
+      "name": "vol_z_60",
+      "gain": 0.0
+    },
+    {
+      "name": "log_vol",
+      "gain": 0.0
+    },
+    {
+      "name": "vol_shock_5",
+      "gain": 0.0
+    },
+    {
+      "name": "imb_5",
+      "gain": 0.0
+    },
+    {
+      "name": "tbr_15",
+      "gain": 0.0
+    },
+    {
+      "name": "tbr_5",
+      "gain": 0.0
+    },
+    {
+      "name": "tbr",
+      "gain": 0.0
+    },
+    {
+      "name": "gap_up_5",
+      "gain": 0.0
+    },
+    {
+      "name": "gap_dn",
+      "gain": 0.0
+    },
+    {
+      "name": "gap_up",
+      "gain": 0.0
+    },
+    {
+      "name": "imb_15",
+      "gain": 0.0
+    },
+    {
+      "name": "dow_cos",
+      "gain": 0.0
+    },
+    {
+      "name": "obi_10",
+      "gain": 0.0
+    }
+  ],
+  "calib": {
+    "beta_bps": 13.695748190247981,
+    "intercept_bps": 0.16243369867402738,
+    "gated_up_mean_bps": 0.0,
+    "gated_down_mean_bps": 0.0,
+    "mean_abs_bps": 9.21408241768787,
+    "abs_intercept": 1.5556268614257962,
+    "abs_beta_conf": 95.72791809507183,
+    "abs_beta_vol": 0.5082249641215427,
+    "abs_bins": [
+      {
+        "lo": 0.0,
+        "hi": 0.05,
+        "mean_abs": 9.21408241768787,
+        "p50": 5.959278367095866,
+        "n": 19421
+      }
+    ],
+    "horizon_m": 15,
+    "clip_max_bps": 96.82458365518542
+  },
+  "heads": {
+    "1": {
+      "calib": {
+        "beta_bps": 1.398241084717886,
+        "intercept_bps": 0.0063820928462197495,
+        "gated_up_mean_bps": 0.0,
+        "gated_down_mean_bps": 0.0,
+        "mean_abs_bps": 2.4535653055055104,
+        "abs_intercept": 0.32048756584802957,
+        "abs_beta_conf": 17.906530697288357,
+        "abs_beta_vol": 0.5713973994826066,
+        "abs_bins": [
+          {
+            "lo": 0.0,
+            "hi": 0.05,
+            "mean_abs": 2.4535653055055104,
+            "p50": 1.5986325831307546,
+            "n": 19117
+          }
+        ],
+        "horizon_m": 1,
+        "clip_max_bps": 80.0
+      },
+      "test": {
+        "gated_acc": null,
+        "n": 0,
+        "coverage": 0.0,
+        "naive_last_acc": 0.4962075639483183,
+        "mean_abs_move_bps": null,
+        "expectancy_maker_rt": null,
+        "expectancy_taker_rt": null,
+        "expectancy_1bp": null,
+        "expectancy_2bp": null,
+        "note": "aucune barre gated \u2014 couverture nulle au seuil de frais",
+        "ungated_tau_only": {
+          "gated_acc": null,
+          "n": 0,
+          "coverage": 0.0,
+          "mean_abs_move_bps": null,
+          "expectancy_maker_rt": null,
+          "expectancy_taker_rt": null
+        },
+        "all_test_mean_abs_bps": 3.428120754104655
+      },
+      "enabled": true,
+      "best_iteration": 6,
+      "n_train": 89210,
+      "n_val": 19117,
+      "n_test": 19117
+    },
+    "3": {
+      "calib": {
+        "beta_bps": 2.6784063818114547,
+        "intercept_bps": 0.01670974577303894,
+        "gated_up_mean_bps": 3.350774410869062,
+        "gated_down_mean_bps": -1.2306115733081187,
+        "mean_abs_bps": 4.151079365152695,
+        "abs_intercept": 0.7371421340946436,
+        "abs_beta_conf": 9.395355932316138,
+        "abs_beta_vol": 0.5374794014461622,
+        "abs_bins": [
+          {
+            "lo": 0.0,
+            "hi": 0.05,
+            "mean_abs": 4.046485120200562,
+            "p50": 2.6557251208769728,
+            "n": 18257
+          },
+          {
+            "lo": 0.05,
+            "hi": 0.1,
+            "mean_abs": 5.853705705767457,
+            "p50": 3.7311611561263724,
+            "n": 1087
+          }
+        ],
+        "horizon_m": 3,
+        "clip_max_bps": 80.0
+      },
+      "test": {
+        "gated_acc": null,
+        "n": 0,
+        "coverage": 0.0,
+        "naive_last_acc": 0.49207660145563414,
+        "mean_abs_move_bps": null,
+        "expectancy_maker_rt": null,
+        "expectancy_taker_rt": null,
+        "expectancy_1bp": null,
+        "expectancy_2bp": null,
+        "note": "aucune barre gated \u2014 couverture nulle au seuil de frais",
+        "ungated_tau_only": {
+          "gated_acc": 0.5191256830601093,
+          "n": 183,
+          "coverage": 0.00944613637536778,
+          "mean_abs_move_bps": 16.30936667997533,
+          "expectancy_maker_rt": -121.9956957081136,
+          "expectancy_taker_rt": -241.9956957081136
+        },
+        "all_test_mean_abs_bps": 5.813329327638757
+      },
+      "enabled": true,
+      "best_iteration": 74,
+      "n_train": 90402,
+      "n_val": 19372,
+      "n_test": 19373
+    },
+    "5": {
+      "calib": {
+        "beta_bps": 5.0164375297348185,
+        "intercept_bps": 0.04764968796935978,
+        "gated_up_mean_bps": 0.0,
+        "gated_down_mean_bps": 0.0,
+        "mean_abs_bps": 5.333785717059554,
+        "abs_intercept": 1.178872675888315,
+        "abs_beta_conf": 10.297498753795857,
+        "abs_beta_vol": 0.5248803563053079,
+        "abs_bins": [
+          {
+            "lo": 0.0,
+            "hi": 0.05,
+            "mean_abs": 5.333785717059554,
+            "p50": 3.446669916278844,
+            "n": 19404
+          }
+        ],
+        "horizon_m": 5,
+        "clip_max_bps": 80.0
+      },
+      "test": {
+        "gated_acc": null,
+        "n": 0,
+        "coverage": 0.0,
+        "naive_last_acc": 0.49033754187065187,
+        "mean_abs_move_bps": null,
+        "expectancy_maker_rt": null,
+        "expectancy_taker_rt": null,
+        "expectancy_1bp": null,
+        "expectancy_2bp": null,
+        "note": "aucune barre gated \u2014 couverture nulle au seuil de frais",
+        "ungated_tau_only": {
+          "gated_acc": null,
+          "n": 0,
+          "coverage": 0.0,
+          "mean_abs_move_bps": null,
+          "expectancy_maker_rt": null,
+          "expectancy_taker_rt": null
+        },
+        "all_test_mean_abs_bps": 7.510340035077384
+      },
+      "enabled": true,
+      "best_iteration": 11,
+      "n_train": 90553,
+      "n_val": 19404,
+      "n_test": 19405
+    },
+    "10": {
+      "calib": {
+        "beta_bps": 8.945039837392068,
+        "intercept_bps": 0.10738389357930653,
+        "gated_up_mean_bps": 0.0,
+        "gated_down_mean_bps": 0.0,
+        "mean_abs_bps": 7.518865463795047,
+        "abs_intercept": 1.569886845427868,
+        "abs_beta_conf": 33.10856480547224,
+        "abs_beta_vol": 0.5156947542531871,
+        "abs_bins": [
+          {
+            "lo": 0.0,
+            "hi": 0.05,
+            "mean_abs": 7.518865463795047,
+            "p50": 4.923827955458648,
+            "n": 19418
+          }
+        ],
+        "horizon_m": 10,
+        "clip_max_bps": 80.0
+      },
+      "test": {
+        "gated_acc": null,
+        "n": 0,
+        "coverage": 0.0,
+        "naive_last_acc": 0.48740923837478756,
+        "mean_abs_move_bps": null,
+        "expectancy_maker_rt": null,
+        "expectancy_taker_rt": null,
+        "expectancy_1bp": null,
+        "expectancy_2bp": null,
+        "note": "aucune barre gated \u2014 couverture nulle au seuil de frais",
+        "ungated_tau_only": {
+          "gated_acc": null,
+          "n": 0,
+          "coverage": 0.0,
+          "mean_abs_move_bps": null,
+          "expectancy_maker_rt": null,
+          "expectancy_taker_rt": null
+        },
+        "all_test_mean_abs_bps": 10.624855812389109
+      },
+      "enabled": true,
+      "best_iteration": 7,
+      "n_train": 90618,
+      "n_val": 19418,
+      "n_test": 19419
+    },
+    "15": {
+      "calib": {
+        "beta_bps": 13.695748190247981,
+        "intercept_bps": 0.16243369867402738,
+        "gated_up_mean_bps": 0.0,
+        "gated_down_mean_bps": 0.0,
+        "mean_abs_bps": 9.21408241768787,
+        "abs_intercept": 1.5556268614257962,
+        "abs_beta_conf": 95.72791809507183,
+        "abs_beta_vol": 0.5082249641215427,
+        "abs_bins": [
+          {
+            "lo": 0.0,
+            "hi": 0.05,
+            "mean_abs": 9.21408241768787,
+            "p50": 5.959278367095866,
+            "n": 19421
+          }
+        ],
+        "horizon_m": 15,
+        "clip_max_bps": 96.82458365518542
+      },
+      "test": {
+        "gated_acc": null,
+        "n": 0,
+        "coverage": 0.0,
+        "naive_last_acc": 0.4929976315518484,
+        "mean_abs_move_bps": null,
+        "expectancy_maker_rt": null,
+        "expectancy_taker_rt": null,
+        "expectancy_1bp": null,
+        "expectancy_2bp": null,
+        "note": "aucune barre gated \u2014 couverture nulle au seuil de frais",
+        "ungated_tau_only": {
+          "gated_acc": null,
+          "n": 0,
+          "coverage": 0.0,
+          "mean_abs_move_bps": null,
+          "expectancy_maker_rt": null,
+          "expectancy_taker_rt": null
+        },
+        "all_test_mean_abs_bps": 12.971560807859616
+      },
+      "enabled": true,
+      "best_iteration": 4,
+      "n_train": 90632,
+      "n_val": 19421,
+      "n_test": 19422
+    },
+    "30": {
+      "calib": {
+        "beta_bps": 21.671718331450023,
+        "intercept_bps": 0.22306903226262392,
+        "gated_up_mean_bps": 0.0,
+        "gated_down_mean_bps": 0.0,
+        "mean_abs_bps": 13.187439683082438,
+        "abs_intercept": 4.447063599680485,
+        "abs_beta_conf": -51.37585200474797,
+        "abs_beta_vol": 0.4973035370910425,
+        "abs_bins": [
+          {
+            "lo": 0.0,
+            "hi": 0.05,
+            "mean_abs": 13.19341654478229,
+            "p50": 8.52001230456867,
+            "n": 19412
+          }
+        ],
+        "horizon_m": 30,
+        "clip_max_bps": 136.93063937629154
+      },
+      "test": {
+        "gated_acc": null,
+        "n": 0,
+        "coverage": 0.0,
+        "naive_last_acc": 0.4998712866189569,
+        "mean_abs_move_bps": null,
+        "expectancy_maker_rt": null,
+        "expectancy_taker_rt": null,
+        "expectancy_1bp": null,
+        "expectancy_2bp": null,
+        "note": "aucune barre gated \u2014 couverture nulle au seuil de frais",
+        "ungated_tau_only": {
+          "gated_acc": null,
+          "n": 0,
+          "coverage": 0.0,
+          "mean_abs_move_bps": null,
+          "expectancy_maker_rt": null,
+          "expectancy_taker_rt": null
+        },
+        "all_test_mean_abs_bps": 18.600046351757765
+      },
+      "enabled": true,
+      "best_iteration": 9,
+      "n_train": 90639,
+      "n_val": 19423,
+      "n_test": 19423
+    }
+  },
+  "maker_rt_bps": 120.0,
+  "taker_rt_bps": 240.0,
+  "fee_note": "Gate = RT faiseur 120 bp (Advanced Trade intro non v\u00e9rifi\u00e9). Exchange 60/40 est une alternate nomm\u00e9e, pas le d\u00e9faut.",
+  "honest": "Couverture TEST au gate 120 bp (RT faiseur) \u2248 0 : le |move| 15 m BTC est trop souvent sous les frais. C\u2019est acceptable \u2014 le paper reste honn\u00eate."
+}
