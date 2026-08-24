@@ -2,7 +2,9 @@
 
 Prédicteur IA **indépendant** du prix Bitcoin à **5 secondes**. Interface française. Ce n’est **pas** un bot de trading, ni un conseil financier — un jouet de recherche.
 
-Le live lit **Coinbase Exchange** public REST, produit **BTC-USD** (ticker, carnet niveau 2, trades). Aucune clé API. Les bougies 1s live sont reconstruites à partir des trades (taker buy = maker `sell`).
+Le live lit **Coinbase Exchange** public REST, produit **BTC-USD** (ticker, carnet niveau 2, trades). Aucune clé API. Les bougies 1s live sont reconstruites à partir des trades (taker buy = maker `sell`). Le scoreur n’utilise que la **dernière barre 1s complète** (la seconde en cours est affichée sur le graphique, pas dans les features).
+
+Les poids live restent Binance Vision 45 j : `log_vol` et `cvd_*` live Coinbase sont ramenés à l’échelle Binance (~10×) ; ret / tbr / imb / z-scores restent bruts. Sans ça les arbres voient des vecteurs hors distribution.
 
 **Feu** seulement si (1) P(↑) sort de la bande τ **et** (2) le |move| 5s **attendu** ≥ **1 bp**. Objectif : meilleure espérance après 1 bp de coût, pas un headline de gated-accuracy.
 
@@ -57,15 +59,15 @@ Objectif : laisser https://fanal.netlify.app ouvert **24 heures** et voir si le 
 | Positions | **une à la fois**, flatten à l’horizon **5 s** |
 | Entrée | feu live **et** `|move|` ≥ `PAPER_MIN_MOVE_BPS` (défaut **1,0** ; constante relevable pour coller à l’aller-retour de frais) |
 | Preneur (défaut) | fill immédiat bid/ask, frais **taker des deux côtés** |
-| Faiseur / post-only | achat au **bid** (fill si le prix trade dessous), vente à l’**ask** (fill si dessus) ; sinon **annulé** à l’horizon. Sortie faiseur, sinon flatten preneur. |
+| Faiseur / post-only | achat au **bid**, vente à l’**ask** ; fill seulement si le marché **trade à travers** (low < bid / high > ask), pas un touch ni last/mid. Barre 1s commencée avant l’ordre ignorée. Sinon **annulé** à l’horizon du signal. Sortie faiseur, sinon flatten preneur. |
 | Frais | palier retail Coinbase Advanced Trade **0–10 000 $ US / 30 j** : preneur **60 bp**, faiseur **40 bp** ([barème public](https://help.coinbase.com/en/exchange/trading-and-funding/exchange-fees)). Aller-retour preneur = **120 bp**. |
 | Short | notionnel virtuel — le spot BTC-USD n’a pas d’inventaire à découvert. |
-| Horloge | chaque `GET /api/live` (l’UI poll **1 s**). **Laisser l’onglet au premier plan** : un onglet en arrière-plan est ralenti, et Netlify n’a pas de cron à 1 s. |
+| Horloge | chaque `GET /api/live` (l’UI poll **1 s**) **et** la function planifiée `paper-tick` (**1 min**, cron Netlify). L’onglet au premier plan donne la résolution 5 s ; sans lui le flatten avance quand même à la minute — un 24 h paper ne dépend plus d’un onglet ouvert. |
 | Persistance | store Blobs `fanal-paper` / clé `ledger` (`consistency: strong`). En local : `/tmp/fanal-paper-ledger.json`. |
 
 Le paper preneur 5 s **devrait perdre** : 120 bp de friction vs ~1 bp de move. L’UI n’en cache rien (cash, equity, PnL réalisé, frais, taux de hits, n, position, mode).
 
-`POST /api/paper` `{ "mode": "taker" | "maker" }` change le mode. `GET /api/paper` relit le carnet sans avancer l’horloge.
+`POST /api/paper` `{ "mode": "taker" | "maker" }` change le mode. `GET /api/paper` relit le carnet sans avancer l’horloge. `GET /api/paper-tick` (et la function planifiée homonyme, cron 1 min) avance un pas comme `/api/live`.
 
 **Non branché** : pas de clés API, pas d’ordres Advanced Trade, pas de retraits.
 
@@ -119,6 +121,7 @@ Le paper 5s est **persisté** via Netlify Blobs : un cold start ne wipe plus le 
 - `GET /api/health` — `paper` = `"blobs"` | `"file"` (plus `"memory"`)
 - `GET /api/ticker` — ticker Coinbase BTC-USD (+ stats 24h)
 - `GET /api/book` — profondeur niveau 2, mid, OBI 10
-- `GET /api/live` — signal + spark + `forecasts[]` + **paper persisté** + carnet + bande pourquoi. Avance le paper d’un pas.
+- `GET /api/live` — signal + spark + `forecasts[]` + **paper persisté** + carnet + bande pourquoi. Avance le paper d’un pas (features = barre 1s complète).
 - `GET /api/paper` — snapshot du carnet (sans pas de simulation)
 - `POST /api/paper` — `{ "mode": "taker" | "maker" }`
+- `GET /api/paper-tick` — même pas paper que `/live` (cron 1 min en prod)

@@ -1,4 +1,4 @@
-import { snapshotLive } from "./bars";
+import { snapshotLive, completedKlines } from "./bars";
 import { bookFromDepth } from "./book";
 import { COINBASE_PRODUCT, fetchBook, fetchStats, fetchTicker, parseTradeTime } from "./coinbase";
 import { computeFeatureMap, retBps, rvWindow, sparkFrom, vectorFromMap, whyStrip } from "./features";
@@ -7,6 +7,7 @@ import { paperStoreKind, snapshotPaper, stepPaper, setPaperMode, type MarketPx }
 import type { PaperMode } from "./paperFees";
 import { getMeta, getMeta15, is15Enabled, predictPUp, predictPUp15, verifySanity } from "./scorer";
 import type { HealthResponse, LiveResponse, Signal, SparkPoint, TickerResponse } from "./types";
+import { adaptLiveFeatures } from "./venue";
 
 let sanityChecked = false;
 
@@ -34,7 +35,7 @@ function makeSignal(
   const probUp = pUp >= tau;
   const probDown = pUp <= 1 - tau;
   const probGated = probUp || probDown;
-  const moveGated = absMove >= minMoveBps;
+  const moveGated = absMove >= minMoveBps - 1e-12;
   let label: Signal["label"] = "NEUTRE";
   let side: Signal["side"] = "flat";
   let gated = false;
@@ -56,6 +57,13 @@ function makeSignal(
     side = "down";
     gated = true;
     why = `P(↑) ${fmtP(pUp)} ≤ 1−τ ${fmtP(1 - tau)} et |move| ${fmtP(absMove)} ≥ ${fmtP(minMoveBps)} bp`;
+  }
+  /* Belt: never report gated if |move| < min (train/serve formula must agree). */
+  if (gated && absMove < minMoveBps - 1e-12) {
+    gated = false;
+    side = "flat";
+    label = "NEUTRE";
+    gate_block = "move";
   }
   const confidence = side === "down" ? 1 - pUp : side === "up" ? pUp : Math.max(pUp, 1 - pUp);
   const target_px = close * (1 + move / 1e4);
@@ -108,14 +116,6 @@ function emptyBook() {
   };
 }
 
-function featureKlines(klines: { t: number; o: number; h: number; l: number; c: number; v: number; n: number; tb: number }[]) {
-  if (klines.length < 2) return klines;
-  const last = klines[klines.length - 1];
-  // The current second is often ticker-only (v=0). Score the last traded bar.
-  if (last.n === 0 && last.v === 0) return klines.slice(0, -1);
-  return klines;
-}
-
 export async function buildLive(): Promise<LiveResponse> {
   ensureSanity();
   const meta = getMeta();
@@ -123,30 +123,31 @@ export async function buildLive(): Promise<LiveResponse> {
   const minMove = meta.min_move_bps ?? meta.calib?.min_move_bps ?? 1.0;
   const test = meta.test;
   let error: string | null = null;
-  const calib = {
-    ...meta.calib,
-    mean_abs_bps: meta.test?.mean_abs_move_bps ?? meta.calib?.mean_abs_bps ?? 1,
-  };
+  const calib = meta.calib;
 
   try {
     const snap = await snapshotLive();
     const klines = snap.klines;
     const book = bookFromDepth(snap.book);
-    const close = snap.last || klines[klines.length - 1]?.c || 0;
-    const now = snap.now;
+    const exchNow = snap.now;
+    const wall = Date.now();
+    const last = snap.last || klines[klines.length - 1]?.c || 0;
+    const mid = book.mid || last;
+    const featBars = completedKlines(klines, wall);
 
-    const featBars = featureKlines(klines);
     let signal: Signal;
-    let map: Record<string, number> = {};
+    let rawMap: Record<string, number> = {};
+    let modelMap: Record<string, number> = {};
     if (featBars.length >= 61) {
-      map = computeFeatureMap(featBars);
-      const names = meta.features?.length ? meta.features : Object.keys(map);
-      const x = vectorFromMap(map, names);
+      rawMap = computeFeatureMap(featBars);
+      modelMap = adaptLiveFeatures(rawMap, meta.train_archive);
+      const names = meta.features?.length ? meta.features : Object.keys(modelMap);
+      const x = vectorFromMap(modelMap, names);
       const pUp = predictPUp(x);
-      signal = makeSignal(pUp, close, 5, tau, calib, minMove, map);
+      signal = makeSignal(pUp, mid, 5, tau, calib, minMove, modelMap);
     } else {
-      signal = makeSignal(0.5, close, 5, tau, calib, minMove);
-      signal.why = "amorçage Coinbase — reconstruction des barres 1s";
+      signal = makeSignal(0.5, mid, 5, tau, calib, minMove);
+      signal.why = "amorçage Coinbase — reconstruction des barres 1s (barre courante exclue)";
       signal.gated = false;
       signal.side = "flat";
       signal.label = "NEUTRE";
@@ -156,34 +157,31 @@ export async function buildLive(): Promise<LiveResponse> {
     if (is15Enabled() && featBars.length >= 61) {
       const meta15 = getMeta15();
       const names15 = meta15.features?.length ? meta15.features : meta.features;
-      const x15 = vectorFromMap(map, names15);
+      const map15 = adaptLiveFeatures(rawMap, meta15.train_archive ?? meta.train_archive);
+      const x15 = vectorFromMap(map15, names15);
       const p15 = predictPUp15(x15);
       const min15 = meta15.min_move_bps ?? meta15.calib?.min_move_bps ?? minMove;
-      const calib15 = {
-        ...meta15.calib,
-        mean_abs_bps: meta15.test?.mean_abs_move_bps ?? meta15.calib?.mean_abs_bps ?? 1,
-      };
-      signal15 = makeSignal(p15, close, 15, meta15.tau || tau, calib15, min15, map);
+      signal15 = makeSignal(p15, mid, 15, meta15.tau || tau, meta15.calib, min15, map15);
     }
 
-    const mid = book.mid || close;
     const lastBar = klines[klines.length - 1];
     const market: MarketPx = {
-      now,
+      now: wall,
+      exch_now: exchNow,
       mid,
       bid: book.bids[0]?.p ?? 0,
       ask: book.asks[0]?.p ?? 0,
-      last: close,
-      low: lastBar?.l ?? close,
-      high: lastBar?.h ?? close,
-      bars: klines.slice(-12).map((k) => ({ t: k.t, h: k.h, l: k.l })),
+      last,
+      low: lastBar?.l ?? last,
+      high: lastBar?.h ?? last,
+      bars: klines.slice(-16).map((k) => ({ t: k.t, h: k.h, l: k.l })),
     };
     const paper = await stepPaper(market, signal);
-    const forecasts = updateForecasts({ now, mid, signal5: signal, signal15 });
+    const forecasts = updateForecasts({ now: exchNow, mid, signal5: signal, signal15 });
     const spark = markSpark(sparkFrom(klines, 300), forecasts);
-    const ret5 = retBps(klines, 5);
-    const rv60 = rvWindow(klines, 60);
-    const why = whyStrip(map, meta.importance, [{ key: "obi_10", value: book.obi_10 }]);
+    const ret5 = retBps(featBars.length ? featBars : klines, 5);
+    const rv60 = rvWindow(featBars.length ? featBars : klines, 60);
+    const why = whyStrip(rawMap, meta.importance, [{ key: "obi_10", value: book.obi_10 }]);
 
     return {
       signal,
@@ -199,7 +197,7 @@ export async function buildLive(): Promise<LiveResponse> {
       bar_s: 1,
       tau,
       min_move_bps: minMove,
-      now,
+      now: exchNow,
       venue: "coinbase",
       product: "BTC-USD",
       test,
@@ -310,6 +308,13 @@ export async function handleApi(
     if (p.endsWith("/ticker")) return { status: 200, body: await buildTicker() };
     if (p.endsWith("/book")) return { status: 200, body: await buildBook() };
     if (p.endsWith("/live")) return { status: 200, body: await buildLive() };
+    if (p.endsWith("/paper-tick")) {
+      const live = await buildLive();
+      return {
+        status: 200,
+        body: { ok: true, tick: "paper", n: live.paper?.n ?? 0, remaining_s: live.paper?.remaining_s ?? 0 },
+      };
+    }
     if (p.endsWith("/paper")) return handlePaper(req);
     return { status: 404, body: { error: "not_found" } };
   } catch (err) {

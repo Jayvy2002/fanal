@@ -9,6 +9,9 @@
   node_bundler = "esbuild"
   external_node_modules = ["@netlify/blobs"]
 
+[functions."paper-tick"]
+  schedule = "* * * * *"
+
 [build.environment]
   NODE_VERSION = "22"
 

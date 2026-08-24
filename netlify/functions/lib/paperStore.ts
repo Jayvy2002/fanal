@@ -24,13 +24,17 @@ type BlobStore = {
 };
 
 let kindMemo: StoreKind | null = null;
+let blobsMemo: BlobStore | null | undefined;
 
 async function tryBlobs(): Promise<BlobStore | null> {
+  if (blobsMemo !== undefined) return blobsMemo;
   try {
     const mod = await import("@netlify/blobs");
     const store = mod.getStore({ name: STORE, consistency: "strong" }) as BlobStore;
+    blobsMemo = store;
     return store;
   } catch {
+    blobsMemo = null;
     return null;
   }
 }
@@ -54,14 +58,20 @@ async function loadFile(): Promise<Loaded> {
 export async function loadLedger(): Promise<Loaded> {
   const blobs = await tryBlobs();
   if (blobs) {
-    try {
-      const hit = await blobs.getWithMetadata(KEY, { type: "json" });
-      kindMemo = "blobs";
-      if (!hit || hit.data == null) return { ledger: null, etag: undefined, kind: "blobs" };
-      return { ledger: hit.data as Ledger, etag: hit.etag, kind: "blobs" };
-    } catch {
-      /* getStore a réussi mais l’I/O Blobs a échoué : ne pas inventer un ledger vide. */
+    let lastErr: unknown;
+    for (let i = 0; i < 4; i++) {
+      try {
+        const hit = await blobs.getWithMetadata(KEY, { type: "json" });
+        kindMemo = "blobs";
+        if (!hit || hit.data == null) return { ledger: null, etag: undefined, kind: "blobs" };
+        return { ledger: hit.data as Ledger, etag: hit.etag, kind: "blobs" };
+      } catch (err) {
+        lastErr = err;
+        await new Promise((r) => setTimeout(r, 40 * (i + 1)));
+      }
     }
+    /* Blobs est le store de prod : ne pas basculer sur /tmp (ledger fantôme / wipe). */
+    throw lastErr instanceof Error ? lastErr : new Error("blobs_load_failed");
   }
   return loadFile();
 }
@@ -77,7 +87,8 @@ export async function saveLedger(ledger: Ledger, etag?: string): Promise<boolean
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/412|precondition|onlyIfMatch|if-match|conflict/i.test(msg)) return false;
-      /* Blobs inutilisable (dev local, permissions) → fichier. */
+      /* Ne pas écrire un fork fichier si Blobs est configuré. */
+      throw err instanceof Error ? err : new Error("blobs_save_failed");
     }
   }
   await mkdir(path.dirname(LOCAL_FILE), { recursive: true });

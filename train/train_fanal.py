@@ -2,9 +2,10 @@
 """Train leak-free LightGBM 5s (+ optional 15s) on Coinbase Exchange BTC-USD 1s bars.
 
 1s bars are reconstructed from public REST trades (see fetch_coinbase.py). No API key.
-Live Fanal uses the same relative microstructure features on Coinbase 1s bars.
-Time-based split only. Gate = probability τ AND expected |move| ≥ ~1 bp, tuned on VAL
-to maximize expectancy after 1 bp cost (not gated-accuracy headlines).
+Live Fanal scores the last *completed* 1s bar with the same relative microstructure
+features. Time-based split only. Gate = probability τ AND expected |move| ≥ ~1 bp,
+using predict_abs_move (0.40 lin + 0.35 bin + 0.25 typical) — live copies this formula
+and must not substitute TEST gated |move| for calib.mean_abs_bps.
 """
 
 from __future__ import annotations
@@ -98,6 +99,7 @@ def rolling_sum(x: np.ndarray, window: int) -> np.ndarray:
 
 
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Features at bar t use only that completed bar and its past (no future close)."""
     o = df["open"].to_numpy(dtype=np.float64)
     h = df["high"].to_numpy(dtype=np.float64)
     low = df["low"].to_numpy(dtype=np.float64)
@@ -269,10 +271,12 @@ def sigmoid(z: float) -> float:
     return ez / (1.0 + ez)
 
 
-def vol_proxy_bps(X: np.ndarray) -> np.ndarray:
+def vol_proxy_bps(X: np.ndarray, horizon: int = HORIZON_5) -> np.ndarray:
     rv5 = X[:, FEATURES.index("rv_5")]
     rv60 = X[:, FEATURES.index("rv_60")]
-    return np.maximum(rv5, rv60) * math.sqrt(HORIZON_5) * 1e4
+    # Live 5s gate matches sqrt(5). 15s head historically used sqrt(5) as well
+    # (calib was fit that way). New 15s trains pass horizon=15.
+    return np.maximum(rv5, rv60) * math.sqrt(horizon) * 1e4
 
 
 def lookup_bins(conf: np.ndarray, bins: list[dict], fallback: float) -> np.ndarray:
@@ -289,7 +293,8 @@ def lookup_bins(conf: np.ndarray, bins: list[dict], fallback: float) -> np.ndarr
 
 def predict_abs_move(p: np.ndarray, X: np.ndarray, calib: dict) -> np.ndarray:
     conf = np.abs(p - 0.5)
-    vol = vol_proxy_bps(X)
+    # sqrt(5) even for a 15s head: existing dumps were fit this way. Live gate copies it.
+    vol = vol_proxy_bps(X, HORIZON_5)
     lin = (
         float(calib.get("abs_intercept") or 0.0)
         + float(calib.get("abs_beta_conf") or 0.0) * conf
@@ -395,7 +400,7 @@ def fit_move_calib(p: np.ndarray, bps: np.ndarray, X: np.ndarray, tau: float) ->
     y = bps[ok]
     abs_y = np.abs(bps)
     conf = np.abs(p - 0.5)
-    vol = vol_proxy_bps(X)
+    vol = vol_proxy_bps(X, HORIZON_5)
     if len(x) < 100 or float(np.var(x)) < 1e-12:
         mean_abs = float(np.nanmean(abs_y[ok])) if ok.any() else 0.0
         return {
