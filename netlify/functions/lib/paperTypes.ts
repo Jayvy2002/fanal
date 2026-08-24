@@ -1,5 +1,7 @@
-import type { FillRole, PaperMode } from "./paperFees";
+import { LEDGER_VERSION, type FillRole, type PaperMode } from "./paperFees";
 import type { Side } from "./types";
+
+export type LedgerVersion = typeof LEDGER_VERSION;
 
 export type PaperOrder = {
   kind: "entry" | "exit";
@@ -47,10 +49,11 @@ export type PaperTrade = {
 };
 
 export type Ledger = {
-  v: 1;
+  v: LedgerVersion;
   started_ts: number;
   updated_ts: number;
   mode: PaperMode;
+  horizon_s: number;
   starting_cash_usd: number;
   cash_usd: number;
   btc: number;
@@ -58,6 +61,7 @@ export type Ledger = {
   fees_usd: number;
   n: number;
   hits: number;
+  hits_after_fees: number;
   n_cancelled: number;
   n_maker_fills: number;
   n_taker_fills: number;

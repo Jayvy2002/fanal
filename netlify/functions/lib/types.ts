@@ -74,6 +74,8 @@ export type PaperRow = {
   exit_role?: "taker" | "maker" | "cancel";
   status?: "open" | "pending_entry" | "closed" | "cancelled";
   id?: string;
+  posted_px?: number;
+  age_s?: number;
 };
 
 export type PaperMode = "taker" | "maker";
@@ -81,7 +83,9 @@ export type PaperMode = "taker" | "maker";
 export type Paper = {
   n: number;
   hits: number;
+  hits_after_fees: number;
   hit_rate: number | null;
+  hit_rate_after_fees: number | null;
   pending: PaperRow | null;
   remaining_s: number;
   recent: PaperRow[];
@@ -96,10 +100,25 @@ export type Paper = {
   clip_usd: number;
   min_move_bps: number;
   n_cancelled: number;
+  n_maker_fills: number;
+  n_taker_fills: number;
+  fee_product: string;
   fee_tier: string;
   taker_fee_bps: number;
   maker_fee_bps: number;
   round_trip_fee_bps: number;
+  round_trip_maker_bps: number;
+  round_trip_taker_bps: number;
+  fee_caveat: string;
+  fee_verified_vs_official: boolean;
+  official_advanced_url: string;
+  official_exchange_url: string;
+  exchange_alternate: {
+    product: string;
+    taker_bps: number;
+    maker_bps: number;
+    used: boolean;
+  };
   persisted: boolean;
   store: "blobs" | "file";
   started_ts: number;
@@ -110,6 +129,8 @@ export type Paper = {
     qty: number;
     entry_px: number;
     role: "taker" | "maker";
+    posted_px?: number;
+    age_s?: number;
   } | null;
   honest: string;
 };
@@ -122,6 +143,8 @@ export type TestMeta = {
   mean_abs_move_bps?: number | null;
   expectancy_1bp?: number | null;
   expectancy_2bp?: number | null;
+  expectancy_maker_rt?: number | null;
+  expectancy_taker_rt?: number | null;
 };
 
 export type LiveResponse = {
@@ -132,9 +155,11 @@ export type LiveResponse = {
   forecasts: Forecast[];
   why: WhyFeature[];
   paper: Paper;
+  paper_signal?: Signal;
   error: string | null;
   kind: "lgbm";
   horizon_s: number;
+  paper_horizon_s?: number;
   bar_s: number;
   tau: number;
   min_move_bps: number;
@@ -142,6 +167,7 @@ export type LiveResponse = {
   venue: "coinbase";
   product: "BTC-USD";
   test: TestMeta;
+  test_60?: TestMeta & { fallback?: boolean; note?: string };
   swapped_live?: boolean | null;
   coinbase_train?: {
     n_days?: number;

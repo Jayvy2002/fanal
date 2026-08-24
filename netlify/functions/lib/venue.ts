@@ -39,7 +39,7 @@ export const SCALE_FREE_FEATURES = [
 ] as const;
 
 /** Volume BTC 1s : pas un ratio, pas un z-score. */
-export const VENUE_SCALE_FEATURES = ["log_vol", "cvd_5", "cvd_15", "cvd_30"] as const;
+export const VENUE_SCALE_FEATURES = ["log_vol", "cvd_5", "cvd_15", "cvd_30", "cvd_60"] as const;
 
 /** Rapport volume 1s typique Binance BTCUSDT / Coinbase BTC-USD. */
 export const BINANCE_VS_COINBASE_VOL_RATIO = 10;
@@ -56,7 +56,7 @@ export function adaptLiveFeatures(
   if (!isBinanceTrained(trainArchive)) return map;
   const out = { ...map };
   if (Number.isFinite(out.log_vol)) out.log_vol = out.log_vol + LOG_VOL_OFFSET;
-  for (const k of ["cvd_5", "cvd_15", "cvd_30"] as const) {
+  for (const k of ["cvd_5", "cvd_15", "cvd_30", "cvd_60"] as const) {
     if (Number.isFinite(out[k])) out[k] = out[k] * BINANCE_VS_COINBASE_VOL_RATIO;
   }
   return out;

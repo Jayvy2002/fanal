@@ -123,7 +123,7 @@ export function LiveChart({ live }: { live: LiveResponse }) {
             <span className="h-[3px] w-3 rounded-sm bg-down" /> ROUGE = raté
           </span>
           <span className="inline-flex items-center gap-1 text-gold/70">
-            15s pâle = tête, pas le paper 5s
+            15s pâle = tête, pas le paper · paper = faiseur 60s
           </span>
         </div>
       </div>

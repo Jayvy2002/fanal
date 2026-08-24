@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Train leak-free LightGBM 5s (+ optional 15s) on Coinbase Exchange BTC-USD 1s bars.
+"""Train leak-free LightGBM 5s (+ optional 15s) or a 60s paper head.
 
 1s bars are reconstructed from public REST trades (see fetch_coinbase.py). No API key.
 Live Fanal scores the last *completed* 1s bar with the same relative microstructure
-features. Time-based split only. Gate = probability τ AND expected |move| ≥ ~1 bp,
-using predict_abs_move (0.40 lin + 0.35 bin + 0.25 typical) — live copies this formula
-and must not substitute TEST gated |move| for calib.mean_abs_bps.
+features. Time-based split only.
+
+  python3 train/train_fanal.py 14              # 5s + 15s Coinbase (historique)
+  python3 train/train_fanal.py --horizon 60    # tête paper 60s (gate = RT faiseur)
+
+Le paper 60s n'entre pas sur la tête 5s. Gate = 120 bp (2 × 60 bp faiseur,
+hypothèse Advanced Trade intro — voir netlify/functions/lib/paperFees.ts).
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import shutil
@@ -60,6 +65,21 @@ FEATURES = [
     "trade_z_30",
 ]
 
+FEATURES_60 = FEATURES + [
+    "ret_120",
+    "rv_120",
+    "tbr_60",
+    "imb_60",
+    "cvd_60",
+    "vol_z_120",
+]
+
+# Must match netlify/functions/lib/paperFees.ts (Advanced Trade intro hyp., not Exchange).
+TAKER_FEE_BPS = 120
+MAKER_FEE_BPS = 60
+MAKER_RT_BPS = 2 * MAKER_FEE_BPS
+TAKER_RT_BPS = 2 * TAKER_FEE_BPS
+
 # Current main (Binance Vision 1s, τ=0.58 only) — honest comparison target.
 PREV_MAIN = {
     "gated_acc": 0.7025870427206409,
@@ -78,7 +98,9 @@ BASELINE_GATED = PREV_MAIN["gated_acc"]
 BASELINE_E1 = PREV_MAIN["expectancy_1bp"]
 HORIZON_5 = 5
 HORIZON_15 = 15
+HORIZON_60 = 60
 WARMUP = 60
+WARMUP_60 = 120
 COST_BPS = 1.0
 MIN_COVERAGE = 0.01
 PREF_COVERAGE = 0.05
@@ -98,7 +120,7 @@ def rolling_sum(x: np.ndarray, window: int) -> np.ndarray:
     return pd.Series(x).rolling(window, min_periods=window).sum().to_numpy()
 
 
-def make_features(df: pd.DataFrame) -> pd.DataFrame:
+def make_features(df: pd.DataFrame, names: list[str] | None = None) -> pd.DataFrame:
     """Features at bar t use only that completed bar and its past (no future close)."""
     o = df["open"].to_numpy(dtype=np.float64)
     h = df["high"].to_numpy(dtype=np.float64)
@@ -164,7 +186,20 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     nmean = rolling_mean(ntr, 30)
     nstd = np.maximum(rolling_std(ntr, 30), 1e-12)
     feat["trade_z_30"] = (ntr - nmean) / nstd
-    return feat[FEATURES]
+
+    col120 = np.full_like(logc, np.nan)
+    col120[120:] = logc[120:] - logc[:-120]
+    feat["ret_120"] = col120
+    feat["rv_120"] = rolling_std(ret_1, 120)
+    feat["tbr_60"] = rolling_mean(tbr, 60)
+    vol60s = np.maximum(rolling_sum(v, 60), 1e-12)
+    feat["imb_60"] = rolling_sum(signed, 60) / vol60s
+    feat["cvd_60"] = rolling_sum(signed, 60)
+    vmean120 = rolling_mean(v, 120)
+    vstd120 = np.maximum(rolling_std(v, 120), 1e-12)
+    feat["vol_z_120"] = (v - vmean120) / vstd120
+    cols = names if names is not None else FEATURES
+    return feat[cols]
 
 
 def make_label(close: np.ndarray, horizon: int) -> np.ndarray:
@@ -271,12 +306,18 @@ def sigmoid(z: float) -> float:
     return ez / (1.0 + ez)
 
 
-def vol_proxy_bps(X: np.ndarray, horizon: int = HORIZON_5) -> np.ndarray:
-    rv5 = X[:, FEATURES.index("rv_5")]
-    rv60 = X[:, FEATURES.index("rv_60")]
-    # Live 5s gate matches sqrt(5). 15s head historically used sqrt(5) as well
-    # (calib was fit that way). New 15s trains pass horizon=15.
-    return np.maximum(rv5, rv60) * math.sqrt(horizon) * 1e4
+def vol_proxy_bps(X: np.ndarray, horizon: int = HORIZON_5, names: list[str] | None = None) -> np.ndarray:
+    cols = names or FEATURES
+    def col(name: str) -> np.ndarray:
+        if name not in cols:
+            return np.zeros(len(X))
+        return X[:, cols.index(name)]
+
+    if horizon >= 60:
+        rv = np.maximum.reduce([col("rv_15"), col("rv_30"), col("rv_60"), col("rv_120")])
+    else:
+        rv = np.maximum(col("rv_5"), col("rv_60"))
+    return rv * math.sqrt(horizon) * 1e4
 
 
 def lookup_bins(conf: np.ndarray, bins: list[dict], fallback: float) -> np.ndarray:
@@ -291,10 +332,18 @@ def lookup_bins(conf: np.ndarray, bins: list[dict], fallback: float) -> np.ndarr
     return out
 
 
-def predict_abs_move(p: np.ndarray, X: np.ndarray, calib: dict) -> np.ndarray:
+def predict_abs_move(
+    p: np.ndarray,
+    X: np.ndarray,
+    calib: dict,
+    horizon: int = HORIZON_5,
+    names: list[str] | None = None,
+) -> np.ndarray:
     conf = np.abs(p - 0.5)
-    # sqrt(5) even for a 15s head: existing dumps were fit this way. Live gate copies it.
-    vol = vol_proxy_bps(X, HORIZON_5)
+    vol_h = horizon if horizon >= 60 else HORIZON_5
+    cap = 400.0 if horizon >= 60 else 25.0
+    vol = vol_proxy_bps(X, vol_h, names)
+    mean_abs_floor = 4.0 if horizon >= 60 else 0.5
     lin = (
         float(calib.get("abs_intercept") or 0.0)
         + float(calib.get("abs_beta_conf") or 0.0) * conf
@@ -302,9 +351,11 @@ def predict_abs_move(p: np.ndarray, X: np.ndarray, calib: dict) -> np.ndarray:
     )
     lin = np.maximum(lin, 0.05)
     bin_e = lookup_bins(conf, calib.get("abs_bins") or [], float(calib.get("mean_abs_bps") or 1.0))
-    typical = np.maximum(float(calib.get("mean_abs_bps") or 0.5), 0.5) * (0.45 + 0.55 * np.clip(conf / 0.5, 0, 1))
+    typical = np.maximum(float(calib.get("mean_abs_bps") or mean_abs_floor), mean_abs_floor) * (
+        0.45 + 0.55 * np.clip(conf / 0.5, 0, 1)
+    )
     blended = 0.40 * lin + 0.35 * bin_e + 0.25 * typical
-    return np.clip(blended, 0.05, 25.0)
+    return np.clip(blended, 0.05, cap)
 
 
 def gate_mask(p: np.ndarray, e_abs: np.ndarray, tau: float, min_move: float) -> np.ndarray:
@@ -325,6 +376,8 @@ def eval_gate(y: np.ndarray, p: np.ndarray, bps: np.ndarray, e_abs: np.ndarray, 
         "mean_signed_bps": None,
         "expectancy_1bp": None,
         "expectancy_2bp": None,
+        "expectancy_maker_rt": None,
+        "expectancy_taker_rt": None,
         "mean_e_abs_bps": None,
     }
     if n == 0:
@@ -344,6 +397,8 @@ def eval_gate(y: np.ndarray, p: np.ndarray, bps: np.ndarray, e_abs: np.ndarray, 
         "mean_signed_bps": mean_signed,
         "expectancy_1bp": mean_signed - 1.0,
         "expectancy_2bp": mean_signed - 2.0,
+        "expectancy_maker_rt": mean_signed - MAKER_RT_BPS,
+        "expectancy_taker_rt": mean_signed - TAKER_RT_BPS,
         "mean_e_abs_bps": float(np.nanmean(e_abs[gated])),
     }
 
@@ -394,13 +449,21 @@ def pick_gate(y: np.ndarray, p: np.ndarray, bps: np.ndarray, e_abs: np.ndarray) 
     return float(chosen["tau"]), float(chosen["min_move_bps"]), chosen
 
 
-def fit_move_calib(p: np.ndarray, bps: np.ndarray, X: np.ndarray, tau: float) -> dict:
+def fit_move_calib(
+    p: np.ndarray,
+    bps: np.ndarray,
+    X: np.ndarray,
+    tau: float,
+    horizon: int = HORIZON_5,
+    names: list[str] | None = None,
+) -> dict:
     ok = np.isfinite(p) & np.isfinite(bps)
     x = p[ok] - 0.5
     y = bps[ok]
     abs_y = np.abs(bps)
     conf = np.abs(p - 0.5)
-    vol = vol_proxy_bps(X, HORIZON_5)
+    vol_h = horizon if horizon >= 60 else HORIZON_5
+    vol = vol_proxy_bps(X, vol_h, names)
     if len(x) < 100 or float(np.var(x)) < 1e-12:
         mean_abs = float(np.nanmean(abs_y[ok])) if ok.any() else 0.0
         return {
@@ -452,11 +515,11 @@ def fit_move_calib(p: np.ndarray, bps: np.ndarray, X: np.ndarray, tau: float) ->
     }
 
 
-def compact_dump(booster: lgb.Booster) -> dict:
+def compact_dump(booster: lgb.Booster, names: list[str] | None = None) -> dict:
     dumped = booster.dump_model(num_iteration=booster.best_iteration)
     return {
         "objective": "binary",
-        "features": FEATURES,
+        "features": names or FEATURES,
         "best_iteration": int(booster.best_iteration),
         "trees": [{"nodes": flatten_tree(t["tree_structure"])} for t in dumped["tree_info"]],
     }
@@ -665,8 +728,7 @@ def load_coinbase_bars(path: Path) -> pd.DataFrame:
     return dense
 
 
-def main() -> int:
-    n_days = int(sys.argv[1]) if len(sys.argv) > 1 else 14
+def main_5s(n_days: int) -> int:
     print(f"Coinbase BTC-USD 1s train target={n_days}d", flush=True)
     path = ensure_bars(n_days)
     df = load_coinbase_bars(path)
@@ -887,6 +949,211 @@ def main() -> int:
                 shutil.copy2(live_meta_path, FN_MODELS / "fanal_sec_meta.json")
 
     return 0
+
+
+def try_load_any_bars() -> tuple[pd.DataFrame, str] | None:
+    if BARS_PATH.exists():
+        print(f"Using Coinbase 1s bars {BARS_PATH}", flush=True)
+        return load_coinbase_bars(BARS_PATH), "coinbase_exchange_btc_usd_trades_1s"
+    vision = ROOT / "data" / "binance"
+    files = sorted(vision.glob("BTCUSDT-1s-*.csv")) + sorted(vision.glob("*.csv.gz"))
+    if files:
+        print(f"Using Binance Vision 1s {files[0].parent} ({len(files)} files)", flush=True)
+        parts = []
+        for f in files:
+            part = pd.read_csv(f, header=None)
+            part.columns = [
+                "open_time", "open", "high", "low", "close", "volume",
+                "close_time", "quote_volume", "count", "taker_buy_base",
+                "taker_buy_quote", "ignore",
+            ][: len(part.columns)]
+            parts.append(part)
+        df = pd.concat(parts, ignore_index=True)
+        for c in ["open_time", "open", "high", "low", "close", "volume", "count", "taker_buy_base"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df = df.dropna(subset=["close"]).sort_values("open_time").reset_index(drop=True)
+        ot0 = float(df["open_time"].iloc[0])
+        if ot0 > 1e14:  # microseconds
+            df["open_time"] = df["open_time"] / 1000.0
+        elif ot0 < 1e12:  # seconds
+            df["open_time"] = df["open_time"] * 1000.0
+        dense = densify_1s(df)
+        return dense, "binance_vision_btcusdt_1s"
+    return None
+
+
+def train_60_main(n_days: int) -> int:
+    """Tête paper 60s. Ne remplace pas les poids live 5s."""
+    loaded = try_load_any_bars()
+    if loaded is None:
+        print(
+            "Aucun dump 1s dans data/ (gitignoré). "
+            "Télécharger des klines Binance Vision 1s dans data/binance/ "
+            "ou lancer fetch_coinbase.py, puis relancer --horizon 60.",
+            flush=True,
+        )
+        return 2
+
+    df, archive = loaded
+    span_d = float((df["open_time"].iloc[-1] - df["open_time"].iloc[0]) / 1000.0 / 86400.0)
+    print(f"60s train archive={archive} span={span_d:.2f}d rows={len(df):,}", flush=True)
+    if span_d < 0.5:
+        print("Historique trop court pour un TEST 60s.", file=sys.stderr)
+        return 1
+
+    X_df = make_features(df, FEATURES_60)
+    close_all = df["close"].to_numpy(dtype=np.float64)
+    y_all = make_label(close_all, HORIZON_60)
+    bps_all = fwd_bps(close_all, HORIZON_60)
+    valid = X_df.notna().all(axis=1) & pd.notna(y_all) & pd.notna(bps_all)
+    valid.iloc[:WARMUP_60] = False
+    X = X_df.loc[valid, FEATURES_60].to_numpy(dtype=np.float64)
+    y = y_all[valid.to_numpy()].astype(np.int32)
+    bps = bps_all[valid.to_numpy()]
+    close = close_all[valid.to_numpy()]
+    print(f"  usable 60s={len(y):,}  up_rate={y.mean():.4f}  |move|={np.nanmean(np.abs(bps)):.2f}bp", flush=True)
+
+    n = len(y)
+    i_train = int(n * 0.70)
+    i_val = int(n * 0.85)
+    X_tr, y_tr = X[:i_train], y[:i_train]
+    X_va, y_va = X[i_train:i_val], y[i_train:i_val]
+    X_te, y_te = X[i_val:], y[i_val:]
+    bps_va, bps_te = bps[i_train:i_val], bps[i_val:]
+
+    dtrain = lgb.Dataset(X_tr, y_tr, feature_name=FEATURES_60, free_raw_data=False)
+    dval = lgb.Dataset(X_va, y_va, feature_name=FEATURES_60, reference=dtrain, free_raw_data=False)
+    params = {
+        "objective": "binary",
+        "metric": ["auc", "binary_logloss"],
+        "learning_rate": 0.05,
+        "num_leaves": 15,
+        "max_depth": 5,
+        "min_child_samples": 200,
+        "subsample": 0.8,
+        "subsample_freq": 1,
+        "colsample_bytree": 0.85,
+        "reg_lambda": 2.0,
+        "verbose": -1,
+        "seed": 42,
+    }
+    print("Training LightGBM horizon=60s (small) …", flush=True)
+    booster = lgb.train(
+        params,
+        dtrain,
+        num_boost_round=150,
+        valid_sets=[dtrain, dval],
+        valid_names=["train", "val"],
+        callbacks=[lgb.early_stopping(30, verbose=True), lgb.log_evaluation(30)],
+    )
+    p_va = booster.predict(X_va, num_iteration=booster.best_iteration)
+    p_te = booster.predict(X_te, num_iteration=booster.best_iteration)
+    calib = fit_move_calib(p_va, bps_va, X_va, 0.58, HORIZON_60, FEATURES_60)
+    e_va = predict_abs_move(p_va, X_va, calib, HORIZON_60, FEATURES_60)
+    e_te = predict_abs_move(p_te, X_te, calib, HORIZON_60, FEATURES_60)
+
+    tau = 0.58
+    min_move = float(MAKER_RT_BPS)
+    calib["min_move_bps"] = min_move
+    val_st = eval_gate(y_va, p_va, bps_va, e_va, tau, min_move)
+    test_st = eval_gate(y_te, p_te, bps_te, e_te, tau, min_move)
+    ungated = eval_gate(y_te, p_te, bps_te, e_te, tau, 0.0)
+    at10 = eval_gate(y_te, p_te, bps_te, e_te, tau, 10.0)
+    ret1 = X_te[:, FEATURES_60.index("ret_60")]
+    naive = float(((ret1 > 0).astype(np.int32) == y_te).mean())
+    test_st["naive_last_acc"] = naive
+    test_st["ungated_tau_only"] = ungated
+    test_st["gate_10bp"] = at10
+
+    def _fmt(st: dict, tag: str) -> None:
+        acc = st.get("gated_acc")
+        acc_s = f"{acc:.4f}" if acc is not None else "n/a"
+        mv = st.get("mean_abs_move_bps")
+        mv_s = f"{mv:.2f}" if mv is not None else "n/a"
+        em = st.get("expectancy_maker_rt")
+        et = st.get("expectancy_taker_rt")
+        em_s = f"{em:.2f}" if em is not None else "n/a"
+        et_s = f"{et:.2f}" if et is not None else "n/a"
+        print(
+            f"{tag} tau={tau:.2f} min_move={st.get('min_move_bps')}bp "
+            f"acc={acc_s} n={st['n']} cov={st['coverage']:.5f} "
+            f"|move|={mv_s} E_makerRT={em_s} E_takerRT={et_s}",
+            flush=True,
+        )
+
+    _fmt(val_st, "VAL  60s gate=RT faiseur")
+    _fmt(test_st, "TEST 60s gate=RT faiseur")
+    _fmt(at10, "TEST 60s gate=10bp (référence, pas le paper)")
+    _fmt(ungated, "TEST 60s τ-only")
+
+    compact = compact_dump(booster, FEATURES_60)
+    sanity = verify_dump(compact, X_te, p_te)
+    gain = booster.feature_importance(importance_type="gain")
+    importance = [{"name": FEATURES_60[i], "gain": float(gain[i])} for i in np.argsort(-gain)]
+    t0 = int(df["open_time"].iloc[0])
+    t1 = int(df["open_time"].iloc[-1])
+    meta = {
+        "kind": "lgbm",
+        "horizon_s": 60,
+        "bar_s": 1,
+        "enabled": True,
+        "fallback": False,
+        "symbol": "BTC-USD",
+        "train_archive": archive,
+        "live_venue": "coinbase",
+        "tau": tau,
+        "min_move_bps": min_move,
+        "features": FEATURES_60,
+        "n_days": round(span_d, 3),
+        "span_start": datetime.fromtimestamp(t0 / 1000, tz=timezone.utc).isoformat(),
+        "span_end": datetime.fromtimestamp(t1 / 1000, tz=timezone.utc).isoformat(),
+        "n_train": int(i_train),
+        "n_val": int(i_val - i_train),
+        "n_test": int(n - i_val),
+        "best_iteration": int(booster.best_iteration),
+        "val": val_st,
+        "test": test_st,
+        "up_rate_test": float(y_te.mean()),
+        "sanity": sanity,
+        "importance": importance,
+        "calib": calib,
+        "cost_bps": MAKER_RT_BPS,
+        "maker_rt_bps": MAKER_RT_BPS,
+        "taker_rt_bps": TAKER_RT_BPS,
+        "honest": (
+            "Gate paper = 120 bp (RT faiseur, hypothèse Advanced Trade intro). "
+            "Le |move| 60s BTC est souvent ~10 bp : couverture minuscule. "
+            "E après frais négative n'est pas maquillée. Ce n'est pas un meilleur 5s."
+        ),
+    }
+    MODELS.mkdir(parents=True, exist_ok=True)
+    FN_MODELS.mkdir(parents=True, exist_ok=True)
+    booster.save_model(str(MODELS / "fanal_sec_lgbm_60.txt"), num_iteration=booster.best_iteration)
+    write_json(MODELS / "fanal_sec_lgbm_60.json", compact)
+    (MODELS / "fanal_sec_meta_60.json").write_text(json.dumps(meta, indent=2))
+    write_json(FN_MODELS / "fanal_sec_lgbm_60.json", compact)
+    (FN_MODELS / "fanal_sec_meta_60.json").write_text(json.dumps(meta, indent=2))
+    print("Wrote 60s paper model (live 5s weights unchanged).", flush=True)
+    _ = n_days
+    return 0
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Train Fanal LightGBM heads")
+    p.add_argument("days", nargs="?", type=int, default=14, help="jours Coinbase à viser (5s/15s)")
+    p.add_argument("--horizon", type=int, default=5, choices=[5, 15, 60], help="5 (défaut) ou 60 (paper)")
+    return p.parse_args(argv)
+
+
+def cli(argv: list[str] | None = None) -> int:
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+    if args.horizon == 60:
+        return train_60_main(args.days)
+    return main_5s(args.days)
+
+
+def main() -> int:
+    return cli()
 
 
 if __name__ == "__main__":
