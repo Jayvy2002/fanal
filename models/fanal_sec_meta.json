@@ -351,7 +351,63 @@
     "mean_abs_bps": 0.41565299802487826
   },
   "cost_bps": 1.0,
-  "swapped_live": true,
-  "swap_reason": "TEST gated 0.7026 \u2265 baseline 0.6731",
-  "horizon_15_enabled": true
+  "swapped_live": false,
+  "swap_reason": "on garde les poids live actuels (TEST gated 0.6005 vs 0.7026, E1=-0.800 vs -0.782, cov=0.178)",
+  "horizon_15_enabled": true,
+  "min_move_bps": 1.0,
+  "previous_main": {
+    "gated_acc": 0.7025870427206409,
+    "n": 299106,
+    "coverage": 0.7494174655114527,
+    "naive_last_acc": 0.5108890102676401,
+    "mean_abs_move_bps": 1.0328544312011778,
+    "expectancy_1bp": -0.7816733953462245,
+    "expectancy_2bp": -1.7816733953462245,
+    "tau": 0.58,
+    "min_move_bps": 0.0,
+    "train_archive": "binance_vision_btcusdt_1s"
+  },
+  "coinbase_train": {
+    "archive": "coinbase_exchange_btc_usd_trades_1s",
+    "test": {
+      "tau": 0.58,
+      "min_move_bps": 1.0,
+      "gated_acc": 0.6005373010952676,
+      "n": 24195,
+      "coverage": 0.1784002595449116,
+      "mean_abs_move_bps": 1.1201920339428435,
+      "mean_signed_bps": 0.2004899805266741,
+      "expectancy_1bp": -0.7995100194733259,
+      "expectancy_2bp": -1.7995100194733258,
+      "mean_e_abs_bps": 1.1677062926903963,
+      "naive_last_acc": 0.5280264263909985,
+      "ungated_tau_only": {
+        "gated_acc": 0.6175297149031668,
+        "n": 48124,
+        "coverage": 0.3548391853829025,
+        "mean_abs_move_bps": 0.9561524168656289,
+        "expectancy_1bp": -0.8212901656096476,
+        "expectancy_2bp": -1.8212901656096476
+      }
+    },
+    "val": {
+      "tau": 0.58,
+      "min_move_bps": 1.0,
+      "gated_acc": 0.5838704687258289,
+      "n": 19393,
+      "coverage": 0.14299407908804684,
+      "mean_abs_move_bps": 1.2753348348813862,
+      "mean_signed_bps": 0.23596291092574326,
+      "expectancy_1bp": -0.7640370890742567,
+      "expectancy_2bp": -1.7640370890742567,
+      "mean_e_abs_bps": 1.2075216181815434
+    },
+    "tau": 0.58,
+    "min_move_bps": 1.0,
+    "n_days": 14.01,
+    "kept_previous_live": true,
+    "note": "poids live inchang\u00e9s (Binance Vision) ; gate 1 bp appliqu\u00e9 \u00e0 l'inf\u00e9rence"
+  },
+  "fallback_note": null,
+  "honest": "Edge directionnel vs naive possible, mais l'esp\u00e9rance apr\u00e8s 1 bp de friction peut rester n\u00e9gative \u2014 ce n'est pas un edge ATM."
 }

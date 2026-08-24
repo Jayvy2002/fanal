@@ -11,6 +11,9 @@ export function Hero({ live }: { live: LiveResponse }) {
   const { signal, paper } = live;
   const color = signalColor(signal.label);
   const hitRate = paper.hit_rate;
+  const minMove = signal.min_move_bps ?? live.min_move_bps ?? 1;
+  const absMove = Math.abs(signal.expected_move_bps);
+  const blockedMove = signal.gate_block === "move";
   return (
     <section
       className="relative overflow-hidden rounded-xl border bg-card px-5 py-4"
@@ -30,6 +33,11 @@ export function Hero({ live }: { live: LiveResponse }) {
           >
             {signal.label}
           </div>
+          {blockedMove && (
+            <div className="mt-1 text-[12px] text-gold/90">
+              |move| prévu {nfBps.format(absMove)} bp sous le seuil {nfPrice.format(minMove)} bp
+            </div>
+          )}
         </div>
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
           <Metric label="Confiance" value={`${nfPrice.format(signal.confidence * 100)} %`} />
@@ -48,7 +56,9 @@ export function Hero({ live }: { live: LiveResponse }) {
           cible {nfPrice.format(signal.target_px)}{" "}
           <span className="text-gold">{nfBps.format(signal.expected_move_bps)} bps</span>
         </span>
-        <span className="text-muted">trajet calibré (pas un scénario inventé)</span>
+        <span className="text-muted">
+          feu seulement si |move| ≥ {nfPrice.format(minMove)} bp (après coût 1 bp)
+        </span>
       </div>
     </section>
   );

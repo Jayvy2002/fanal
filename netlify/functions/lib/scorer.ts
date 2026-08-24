@@ -18,16 +18,28 @@ type CompactModel = {
   trees: { nodes: Node[] }[];
 };
 
+export type AbsBin = {
+  lo: number;
+  hi: number;
+  mean_abs: number;
+};
+
 export type Calib = {
   beta_bps: number;
   intercept_bps: number;
   gated_up_mean_bps: number;
   gated_down_mean_bps: number;
   mean_abs_bps: number;
+  abs_intercept?: number;
+  abs_beta_conf?: number;
+  abs_beta_vol?: number;
+  abs_bins?: AbsBin[];
+  min_move_bps?: number;
 };
 
 export type ModelMeta = {
   tau: number;
+  min_move_bps?: number;
   features: string[];
   horizon_s?: number;
   enabled?: boolean;
@@ -39,10 +51,20 @@ export type ModelMeta = {
     naive_last_acc: number;
     mean_abs_move_bps?: number | null;
     expectancy_1bp?: number | null;
+    expectancy_2bp?: number | null;
   };
   sanity: { x: number[]; p: number; raw: number }[];
   calib?: Calib;
   importance?: { name: string; gain: number }[];
+  swapped_live?: boolean | null;
+  swap_reason?: string;
+  coinbase_train?: {
+    n_days?: number;
+    tau?: number;
+    min_move_bps?: number;
+    kept_previous_live?: boolean;
+    test?: ModelMeta["test"];
+  };
 };
 
 const model = lgbmJson as CompactModel;

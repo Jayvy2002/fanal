@@ -47,6 +47,7 @@ export default function App() {
       <Header
         ticker={ticker}
         tau={live?.tau ?? 0.58}
+        minMoveBps={live?.min_move_bps ?? live?.signal.min_move_bps ?? 1}
         fallbackPrice={live?.signal.close ?? 0}
       />
       <main className="grid gap-4 p-4 lg:grid-cols-[1fr_300px]">
@@ -61,7 +62,10 @@ export default function App() {
               <Hero live={live} />
               <LiveChart live={live} />
               <WhyStrip live={live} />
-              <PaperTable live={live} />
+              <PaperTable
+                live={live}
+                onPaper={(paper) => setLive((cur) => (cur ? { ...cur, paper } : cur))}
+              />
             </>
           ) : (
             <div className="rounded-xl border border-line bg-card px-6 py-16 text-center text-muted">
@@ -73,15 +77,31 @@ export default function App() {
       </main>
       <footer className="border-t border-line px-5 py-4 text-[11px] leading-relaxed text-muted">
         Jouet de recherche, pas un conseil financier. Prix live publics Coinbase Exchange (BTC-USD :
-        ticker, carnet, trades). Le modèle 5s a été entraîné hors-ligne sur des archives 1s Binance
-        Vision (features relatives, sans fuite). Le paper trading est en mémoire par instance Netlify —
-        un redémarrage à froid remet le compteur à zéro.
+        ticker, carnet, trades). Feu seulement si |move| prévu ≥ 1 bp. Paper 24 h persisté (Netlify
+        Blobs en prod) : un cold start ne wipe plus le carnet. Aucun ordre Coinbase réel — le live
+        n’est pas branché.
         {live?.test?.gated_acc != null && (
           <>
             {" "}
-            Test OOS : {(live.test.gated_acc * 100).toFixed(1).replace(".", ",")} % gated vs naive{" "}
-            {(live.test.naive_last_acc * 100).toFixed(1).replace(".", ",")} % (couverture{" "}
-            {(live.test.coverage * 100).toFixed(0).replace(".", ",")} %).
+            Poids live (Binance Vision 1s, TEST τ-only) :{" "}
+            {(live.test.gated_acc * 100).toFixed(1).replace(".", ",")} % gated vs naive{" "}
+            {(live.test.naive_last_acc * 100).toFixed(1).replace(".", ",")} %
+            {live.test.expectancy_1bp != null
+              ? `, E après 1 bp ${live.test.expectancy_1bp.toFixed(2).replace(".", ",")} bp`
+              : ""}
+            .
+          </>
+        )}
+        {live?.coinbase_train?.test?.gated_acc != null && (
+          <>
+            {" "}
+            Réentraînement Coinbase {live.coinbase_train.n_days?.toFixed(0) ?? "14"} j + gate 1 bp :{" "}
+            {(live.coinbase_train.test.gated_acc * 100).toFixed(1).replace(".", ",")} % gated, cov{" "}
+            {((live.coinbase_train.test.coverage ?? 0) * 100).toFixed(0).replace(".", ",")} %
+            {live.coinbase_train.test.expectancy_1bp != null
+              ? `, E1 ${live.coinbase_train.test.expectancy_1bp.toFixed(2).replace(".", ",")} bp`
+              : ""}
+            {live.swapped_live === false ? " — poids non retenus (E1 / acc pas meilleurs)." : "."}
           </>
         )}
       </footer>

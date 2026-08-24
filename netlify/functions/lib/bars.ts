@@ -42,7 +42,8 @@ function upsertTrade(tr: CoinbaseTrade): void {
   const sz = +tr.size;
   if (!Number.isFinite(px) || px <= 0) return;
   const t = bucket(parseTradeTime(tr.time));
-  const buy = tr.side === "buy";
+  // Coinbase Exchange `side` is the MAKER. Taker buy = maker sell.
+  const takerBuy = tr.side === "sell";
   const prev = store.bars.get(t);
   if (!prev) {
     store.bars.set(t, {
@@ -53,7 +54,7 @@ function upsertTrade(tr: CoinbaseTrade): void {
       c: px,
       v: Number.isFinite(sz) ? sz : 0,
       n: 1,
-      tb: buy && Number.isFinite(sz) ? sz : 0,
+      tb: takerBuy && Number.isFinite(sz) ? sz : 0,
     });
     return;
   }
@@ -62,7 +63,7 @@ function upsertTrade(tr: CoinbaseTrade): void {
   prev.c = px;
   if (Number.isFinite(sz)) {
     prev.v += sz;
-    if (buy) prev.tb += sz;
+    if (takerBuy) prev.tb += sz;
   }
   prev.n += 1;
 }

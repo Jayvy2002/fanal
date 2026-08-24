@@ -12,6 +12,8 @@ export type Signal = {
   tau: number;
   expected_move_bps: number;
   target_px: number;
+  min_move_bps?: number;
+  gate_block?: "prob" | "move" | null;
 };
 
 export type WhyFeature = {
@@ -66,7 +68,15 @@ export type PaperRow = {
   hit: boolean | null;
   signed_bps: number | null;
   horizon_s: number;
+  pnl_usd?: number;
+  fee_usd?: number;
+  entry_role?: "taker" | "maker";
+  exit_role?: "taker" | "maker" | "cancel";
+  status?: "open" | "pending_entry" | "closed" | "cancelled";
+  id?: string;
 };
+
+export type PaperMode = "taker" | "maker";
 
 export type Paper = {
   n: number;
@@ -76,6 +86,32 @@ export type Paper = {
   remaining_s: number;
   recent: PaperRow[];
   horizon_s: number;
+  mode: PaperMode;
+  cash_usd: number;
+  equity_usd: number;
+  realized_pnl_usd: number;
+  unrealized_usd: number;
+  fees_usd: number;
+  starting_cash_usd: number;
+  clip_usd: number;
+  min_move_bps: number;
+  n_cancelled: number;
+  fee_tier: string;
+  taker_fee_bps: number;
+  maker_fee_bps: number;
+  round_trip_fee_bps: number;
+  persisted: boolean;
+  store: "blobs" | "file";
+  started_ts: number;
+  updated_ts: number;
+  open_position: {
+    side: Exclude<Side, "flat">;
+    label: "HAUSSIER" | "BAISSIER";
+    qty: number;
+    entry_px: number;
+    role: "taker" | "maker";
+  } | null;
+  honest: string;
 };
 
 export type TestMeta = {
@@ -85,6 +121,7 @@ export type TestMeta = {
   naive_last_acc: number;
   mean_abs_move_bps?: number | null;
   expectancy_1bp?: number | null;
+  expectancy_2bp?: number | null;
 };
 
 export type LiveResponse = {
@@ -100,10 +137,17 @@ export type LiveResponse = {
   horizon_s: number;
   bar_s: number;
   tau: number;
+  min_move_bps: number;
   now: number;
   venue: "coinbase";
   product: "BTC-USD";
   test: TestMeta;
+  swapped_live?: boolean | null;
+  coinbase_train?: {
+    n_days?: number;
+    kept_previous_live?: boolean;
+    test?: TestMeta;
+  };
 };
 
 export type TickerResponse = {
@@ -123,7 +167,8 @@ export type HealthResponse = {
   horizon_s: number;
   bar_s: number;
   tau: number;
+  min_move_bps?: number;
   symbol: string;
   venue: "coinbase";
-  paper: "memory";
+  paper: "blobs" | "file";
 };

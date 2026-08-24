@@ -17,3 +17,6 @@ frontend/.vite/
 *.zip
 *.pkl
 *.pickle
+*.csv.gz
+*.jsonl
+*.parquet

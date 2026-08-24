@@ -2,12 +2,23 @@ import type { Forecast, PathPoint, Side, Signal } from "./types";
 
 const MAX_TRAIL = 20;
 
+export type AbsBin = {
+  lo: number;
+  hi: number;
+  mean_abs: number;
+};
+
 export type Calib = {
   beta_bps?: number;
   intercept_bps?: number;
   gated_up_mean_bps?: number;
   gated_down_mean_bps?: number;
   mean_abs_bps?: number;
+  abs_intercept?: number;
+  abs_beta_conf?: number;
+  abs_beta_vol?: number;
+  abs_bins?: AbsBin[];
+  min_move_bps?: number;
 };
 
 type Lane = {
@@ -22,20 +33,48 @@ function cloneForecast(f: Forecast): Forecast {
   return { ...f, path: f.path.map((p) => ({ ...p })) };
 }
 
-export function expectedMoveBps(pUp: number, calib: Calib | undefined): number {
+function binAbs(conf: number, bins: AbsBin[] | undefined, fallback: number): number {
+  if (!bins?.length) return fallback;
+  for (const b of bins) {
+    if (conf >= b.lo && conf < b.hi) return b.mean_abs;
+  }
+  return bins[bins.length - 1].mean_abs;
+}
+
+/** E[|5s move| bps | p, vol] calibrated on VAL. Used for the 1bp fire gate. */
+export function expectedAbsMoveBps(
+  pUp: number,
+  calib: Calib | undefined,
+  map?: Record<string, number>,
+): number {
   const c = calib ?? {};
+  const conf = Math.abs(pUp - 0.5);
+  const rv5 = map?.rv_5 ?? 0;
+  const rv60 = map?.rv_60 ?? 0;
+  const vol = Math.max(rv5, rv60) * Math.sqrt(5) * 1e4;
+  const meanAbs = Math.max(c.mean_abs_bps ?? 0.5, 0.5);
+  const typical = meanAbs * (0.45 + 0.55 * Math.min(1, conf / 0.5));
+  const hasLin = c.abs_intercept != null || c.abs_beta_conf != null || c.abs_beta_vol != null;
+  const lin = hasLin
+    ? (c.abs_intercept ?? 0) + (c.abs_beta_conf ?? 0) * conf + (c.abs_beta_vol ?? 0) * vol
+    : 0.55 * typical + 0.45 * Math.max(vol, 0);
+  const fromBin = binAbs(conf, c.abs_bins, meanAbs);
+  const parts = [Math.max(0.05, typical)];
+  if (Number.isFinite(lin) && lin > 0) parts.push(lin);
+  if (Number.isFinite(fromBin) && fromBin > 0) parts.push(fromBin);
+  const blended = parts.reduce((a, b) => a + b, 0) / parts.length;
+  if (!Number.isFinite(blended)) return typical;
+  return Math.max(0.05, Math.min(25, blended));
+}
+
+export function expectedMoveBps(
+  pUp: number,
+  calib: Calib | undefined,
+  map?: Record<string, number>,
+): number {
   const sign = pUp >= 0.5 ? 1 : -1;
-  const conf = Math.min(1, Math.abs(pUp - 0.5) / 0.5);
-  const linear = (c.beta_bps ?? 0) * (pUp - 0.5) + (c.intercept_bps ?? 0);
-  const emp = pUp >= 0.5 ? (c.gated_up_mean_bps ?? 0) : (c.gated_down_mean_bps ?? 0);
-  const signed = Number.isFinite(emp) || Number.isFinite(linear) ? 0.55 * emp + 0.45 * linear : 0;
-  const abs = Math.max(c.mean_abs_bps ?? 0, 0.5);
-  // Typical |move| in the called direction, shrunk by distance-to-0.5. Not a moonshot.
-  const typical = sign * abs * (0.45 + 0.55 * conf);
-  const blended = 0.35 * signed + 0.65 * typical;
-  const cap = Math.max(3.5 * abs, 1.5);
-  if (!Number.isFinite(blended)) return sign * abs * 0.5;
-  return Math.max(-cap, Math.min(cap, blended));
+  const absMove = expectedAbsMoveBps(pUp, calib, map);
+  return sign * absMove;
 }
 
 export function projectPath(mid: number, expectedBps: number, ts: number, horizonS: number): PathPoint[] {
