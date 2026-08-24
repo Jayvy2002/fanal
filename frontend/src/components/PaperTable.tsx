@@ -172,8 +172,8 @@ export function PaperTable({
         bp, faiseur {nfPrice.format(maker)} bp. Aller-retour {mode === "taker" ? "preneur" : "faiseur"} ={" "}
         {nfPrice.format(rt)} bp vs |move| 5s ~1 bp — le paper preneur devrait perdre. Aucun ordre réel, aucune
         clé, aucun retrait. Carnet persisté ({p.store === "blobs" ? "Netlify Blobs" : "fichier local"}) : un cold
-        start ne remet plus le livre à zéro.
-        {p.honest ? ` ${p.honest}` : ""}
+        start ne remet plus le livre à zéro. Short = notionnel virtuel. Un jour vert ici voudrait dire qu’on peut
+        parler live — pas avant.
       </div>
 
       <div className="mt-3 overflow-x-auto">
