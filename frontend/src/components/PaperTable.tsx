@@ -117,7 +117,7 @@ export function PaperTable({
   const takerRt = p.round_trip_taker_bps ?? 240;
   const hz = p.horizon_s ?? 60;
   const gate = p.min_move_bps ?? makerRt;
-  const paperSig = live.paper_signal;
+  const paperSig = hz === 5 ? live.signal : (live.paper_signal ?? live.signal);
   const posted = open?.posted_px ?? p.pending?.posted_px ?? p.pending?.mid;
   const age = open?.age_s ?? p.pending?.age_s;
   const fills = `${p.n_maker_fills ?? 0} fai. · ${p.n_taker_fills ?? 0} pre.`;
@@ -128,7 +128,7 @@ export function PaperTable({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-[11px] tracking-[0.16em] text-muted">
-            PAPER 24 H · FAISEUR {hz}s · PAS D’ORDRES LIVE
+            PAPER 24 H · {mode === "maker" ? "FAISEUR" : "PRENEUR"} {hz}s · PAS D’ORDRES LIVE
           </div>
           <div className="mt-1 text-[13px] text-white/85">
             {p.clip_usd ?? 75}&nbsp;$ US / signal · 1 position · flatten {hz}s · départ{" "}
@@ -293,8 +293,9 @@ export function PaperTable({
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={8} className="py-6 text-sm text-muted">
-                  En attente d’un signal paper {hz}s (direction ET |move| prévu ≥ {nfPrice.format(gate)} bp =
-                  RT faiseur). Ce n’est pas le feu 5s. L’espérance après frais n’est pas maquillée.
+                  En attente d’un signal paper {hz}s (direction ET |move| prévu ≥ {nfPrice.format(gate)}{" "}
+                  bp{hz === 60 ? " = RT faiseur" : " = gate 5s"}). {hz === 60 ? "Ce n’est pas le feu 5s. " : ""}
+                  L’espérance après frais n’est pas maquillée.
                 </td>
               </tr>
             ) : (
