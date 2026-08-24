@@ -56,6 +56,15 @@ export type ModelMeta = {
   sanity: { x: number[]; p: number; raw: number }[];
   calib?: Calib;
   importance?: { name: string; gain: number }[];
+  swapped_live?: boolean | null;
+  swap_reason?: string;
+  coinbase_train?: {
+    n_days?: number;
+    tau?: number;
+    min_move_bps?: number;
+    kept_previous_live?: boolean;
+    test?: ModelMeta["test"];
+  };
 };
 
 const model = lgbmJson as CompactModel;

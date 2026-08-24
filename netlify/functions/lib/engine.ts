@@ -191,6 +191,8 @@ export async function buildLive(): Promise<LiveResponse> {
       venue: "coinbase",
       product: "BTC-USD",
       test,
+      swapped_live: meta.swapped_live ?? null,
+      coinbase_train: meta.coinbase_train,
     };
   } catch (err) {
     error = err instanceof Error ? err.message : "live_error";
@@ -215,6 +217,8 @@ export async function buildLive(): Promise<LiveResponse> {
       venue: "coinbase",
       product: "BTC-USD",
       test,
+      swapped_live: meta.swapped_live ?? null,
+      coinbase_train: meta.coinbase_train,
     };
   }
 }

@@ -7,7 +7,6 @@
   "live_venue": "coinbase",
   "live_product": "BTC-USD",
   "tau": 0.58,
-  "min_move_bps": 1.0,
   "features": [
     "ret_1",
     "ret_3",
@@ -354,5 +353,32 @@
   "cost_bps": 1.0,
   "swapped_live": null,
   "swap_reason": null,
-  "enabled": true
+  "enabled": true,
+  "min_move_bps": 1.0,
+  "coinbase_train_15": {
+    "test": {
+      "tau": 0.58,
+      "min_move_bps": 1.0,
+      "gated_acc": 0.5784904323175053,
+      "n": 5644,
+      "coverage": 0.043722789458190664,
+      "mean_abs_move_bps": 1.3416133421384107,
+      "mean_signed_bps": 0.21280431123541788,
+      "expectancy_1bp": -0.7871956887645821,
+      "expectancy_2bp": -1.7871956887645821,
+      "mean_e_abs_bps": 1.412582889742266,
+      "naive_last_acc": 0.513239235858265,
+      "ungated_tau_only": {
+        "gated_acc": 0.5784904323175053,
+        "n": 5644,
+        "coverage": 0.043722789458190664,
+        "mean_abs_move_bps": 1.3416133421384107,
+        "expectancy_1bp": -0.7871956887645821,
+        "expectancy_2bp": -1.7871956887645821
+      }
+    },
+    "tau": 0.58,
+    "min_move_bps": 1.0,
+    "kept_previous_live": true
+  }
 }

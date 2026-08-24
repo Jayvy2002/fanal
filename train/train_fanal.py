@@ -785,8 +785,7 @@ def main() -> int:
             meta.update(extra)
         return meta
 
-    txt15 = MODELS / "fanal_sec_lgbm_15.txt"
-    head15["booster"].save_model(str(txt15), num_iteration=head15["best_iteration"])
+    report = pack_meta(head5, i_train, i_val - i_train, n - i_val)
     meta15 = pack_meta(head15, i_tr15, i_va15 - i_tr15, n15 - i_va15)
     enabled15 = (
         head15["test"]["gated_acc"] is not None
@@ -794,14 +793,51 @@ def main() -> int:
         and head15["test"]["coverage"] >= MIN_COVERAGE
     )
     meta15["enabled"] = bool(enabled15)
-    write_json(MODELS / "fanal_sec_lgbm_15.json", head15["compact"])
-    (MODELS / "fanal_sec_meta_15.json").write_text(json.dumps(meta15, indent=2))
-    write_json(FN_MODELS / "fanal_sec_lgbm_15.json", head15["compact"])
-    (FN_MODELS / "fanal_sec_meta_15.json").write_text(json.dumps(meta15, indent=2))
-    print(f"Wrote 15s model enabled={enabled15}", flush=True)
 
-    report = pack_meta(head5, i_train, i_val - i_train, n - i_val, {"horizon_15_enabled": enabled15})
+    # Always keep the Coinbase experiment on disk (even if live 5s trees stay).
+    head5["booster"].save_model(
+        str(MODELS / "fanal_sec_lgbm_coinbase.txt"), num_iteration=head5["best_iteration"]
+    )
+    write_json(MODELS / "fanal_sec_lgbm_coinbase.json", head5["compact"])
     (MODELS / "fanal_sec_train_report.json").write_text(json.dumps(report, indent=2))
+    head15["booster"].save_model(
+        str(MODELS / "fanal_sec_lgbm_15_coinbase.txt"), num_iteration=head15["best_iteration"]
+    )
+    write_json(MODELS / "fanal_sec_lgbm_15_coinbase.json", head15["compact"])
+    (MODELS / "fanal_sec_meta_15_coinbase.json").write_text(json.dumps(meta15, indent=2))
+    print("Wrote Coinbase experiment dumps (models/*coinbase*)", flush=True)
+
+    prev15_acc = 0.643
+    live15_ok = bool(enabled15) and float(head15["test"]["gated_acc"] or 0) + 1e-12 >= prev15_acc
+    live15_enabled = bool(enabled15)
+    if swap and live15_ok:
+        txt15 = MODELS / "fanal_sec_lgbm_15.txt"
+        head15["booster"].save_model(str(txt15), num_iteration=head15["best_iteration"])
+        write_json(MODELS / "fanal_sec_lgbm_15.json", head15["compact"])
+        (MODELS / "fanal_sec_meta_15.json").write_text(json.dumps(meta15, indent=2))
+        write_json(FN_MODELS / "fanal_sec_lgbm_15.json", head15["compact"])
+        (FN_MODELS / "fanal_sec_meta_15.json").write_text(json.dumps(meta15, indent=2))
+        print(f"Wrote live 15s model enabled={enabled15}", flush=True)
+    else:
+        print(
+            f"Kept previous live 15s (Coinbase 15s TEST acc={head15['test']['gated_acc']})",
+            flush=True,
+        )
+        live15_path = MODELS / "fanal_sec_meta_15.json"
+        if live15_path.exists():
+            old15 = json.loads(live15_path.read_text())
+            old15["min_move_bps"] = TARGET_MIN_MOVE
+            old15["coinbase_train_15"] = {
+                "test": head15["test"],
+                "tau": head15["tau"],
+                "min_move_bps": head15["min_move_bps"],
+                "kept_previous_live": True,
+            }
+            live15_enabled = bool(old15.get("enabled", True))
+            live15_path.write_text(json.dumps(old15, indent=2))
+            shutil.copy2(live15_path, FN_MODELS / "fanal_sec_meta_15.json")
+
+    report["horizon_15_enabled"] = live15_enabled
 
     if swap:
         txt5 = MODELS / "fanal_sec_lgbm.txt"
@@ -826,7 +862,7 @@ def main() -> int:
                         "symbol": "BTC-USD",
                         "swap_reason": reason,
                         "swapped_live": False,
-                        "horizon_15_enabled": enabled15,
+                        "horizon_15_enabled": live15_enabled,
                         "previous_main": PREV_MAIN,
                         "coinbase_train": {
                             "archive": "coinbase_exchange_btc_usd_trades_1s",

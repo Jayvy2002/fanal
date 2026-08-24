@@ -108,6 +108,12 @@ export type LiveResponse = {
   venue: "coinbase";
   product: "BTC-USD";
   test: TestMeta;
+  swapped_live?: boolean | null;
+  coinbase_train?: {
+    n_days?: number;
+    kept_previous_live?: boolean;
+    test?: TestMeta;
+  };
 };
 
 export type TickerResponse = {

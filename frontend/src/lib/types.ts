@@ -106,6 +106,12 @@ export type LiveResponse = {
     expectancy_1bp?: number | null;
     expectancy_2bp?: number | null;
   };
+  swapped_live?: boolean | null;
+  coinbase_train?: {
+    n_days?: number;
+    kept_previous_live?: boolean;
+    test?: LiveResponse["test"];
+  };
 };
 
 export type TickerResponse = {
