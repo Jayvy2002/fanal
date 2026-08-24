@@ -62,12 +62,16 @@ function clipQty(px: number): number {
   return CLIP_USD / px;
 }
 
+function hasQuotes(m: MarketPx): boolean {
+  return m.bid > 0 && m.ask > 0 && m.ask >= m.bid;
+}
+
 function buyPx(m: MarketPx): number {
-  return m.ask > 0 ? m.ask : m.mid;
+  return m.ask > 0 ? m.ask : 0;
 }
 
 function sellPx(m: MarketPx): number {
-  return m.bid > 0 ? m.bid : m.mid;
+  return m.bid > 0 ? m.bid : 0;
 }
 
 function exchOf(m: MarketPx, wallTs: number): number {
@@ -172,6 +176,7 @@ function closeRoundTrip(
 }
 
 function flattenTaker(led: Ledger, pos: PaperPosition, m: MarketPx): void {
+  if (!hasQuotes(m)) return;
   if (pos.side === "up") {
     const px = sellPx(m);
     const notional = px * pos.qty;
@@ -365,7 +370,7 @@ function canEnter(led: Ledger, signal: Signal, m: MarketPx): boolean {
   if (led.last_entry_attempt_ts > 0 && m.now - led.last_entry_attempt_ts < HORIZON_MS - 200) {
     return false;
   }
-  if (!(m.mid > 0) || !(buyPx(m) > 0) || !(sellPx(m) > 0)) return false;
+  if (!hasQuotes(m)) return false;
   return true;
 }
 
@@ -385,12 +390,12 @@ function step(led: Ledger, m: MarketPx, signal: Signal): void {
     if (makerFill(buy ? "buy" : "sell", led.pending.limit_px, m, led.pending.placed_ts)) {
       fillMakerExit(led, led.open, led.pending, m);
       freed = true;
-    } else if (m.now >= led.pending.expire_ts) {
+    } else if (m.now >= led.pending.expire_ts && hasQuotes(m)) {
       flattenTaker(led, led.open, m);
       freed = true;
     }
   } else if (led.open && !led.pending) {
-    if (m.now >= led.open.flatten_ts) {
+    if (m.now >= led.open.flatten_ts && hasQuotes(m)) {
       flattenTaker(led, led.open, m);
       freed = true;
     }

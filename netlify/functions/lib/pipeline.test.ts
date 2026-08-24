@@ -183,6 +183,25 @@ function mkt(over: Partial<MarketPx> = {}): MarketPx {
   assert(coinbase.log_vol === raw.log_vol, "Coinbase-trained trees get raw Coinbase vectors");
 }
 
+/* 10. No bid/ask → never fill at mid (taker or flatten). */
+{
+  const led = newLedger(0);
+  applyPaperStep(
+    led,
+    mkt({ now: T0, bid: 0, ask: 0, mid: 100, last: 100 }),
+    sig(),
+  );
+  assert(led.open == null && led.n === 0, "missing quotes: no taker mid fill");
+  applyPaperStep(led, mkt({ now: T0 + 10 }), sig());
+  assert(led.open != null && led.open.entry_px === 100.1, "enters once bid/ask exist");
+  applyPaperStep(
+    led,
+    mkt({ now: T0 + HORIZON_MS + 20, bid: 0, ask: 0, mid: 120 }),
+    sig({ gated: false, side: "flat", label: "NEUTRE" }),
+  );
+  assert(led.open != null && led.n === 0, "flatten waits for a real book, does not exit at mid 120");
+}
+
 if (failed) {
   console.error(`\n${failed} failure(s)`);
   process.exit(1);

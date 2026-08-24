@@ -67,7 +67,7 @@ Objectif : laisser https://fanal.netlify.app ouvert **24 heures** et voir si le 
 
 Le paper preneur 5 s **devrait perdre** : 120 bp de friction vs ~1 bp de move. L’UI n’en cache rien (cash, equity, PnL réalisé, frais, taux de hits, n, position, mode).
 
-`POST /api/paper` `{ "mode": "taker" | "maker" }` change le mode. `GET /api/paper` relit le carnet sans avancer l’horloge. `GET /api/paper-tick` (et la function planifiée homonyme, cron 1 min) avance un pas comme `/api/live`.
+`POST /api/paper` `{ "mode": "taker" | "maker" }` change le mode. `GET /api/paper` relit le carnet sans avancer l’horloge. En local, `GET /api/paper-tick` avance un pas (Vite). En prod, la function planifiée `paper-tick` (cron 1 min) n’est **pas** invocable par URL — Netlify ne déclenche les crons que sur un deploy publié.
 
 **Non branché** : pas de clés API, pas d’ordres Advanced Trade, pas de retraits.
 
@@ -124,4 +124,4 @@ Le paper 5s est **persisté** via Netlify Blobs : un cold start ne wipe plus le 
 - `GET /api/live` — signal + spark + `forecasts[]` + **paper persisté** + carnet + bande pourquoi. Avance le paper d’un pas (features = barre 1s complète).
 - `GET /api/paper` — snapshot du carnet (sans pas de simulation)
 - `POST /api/paper` — `{ "mode": "taker" | "maker" }`
-- `GET /api/paper-tick` — même pas paper que `/live` (cron 1 min en prod)
+- cron `paper-tick` (1 min, prod publiée seulement) — même pas que `/api/live`
