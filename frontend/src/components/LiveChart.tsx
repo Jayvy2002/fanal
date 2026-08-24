@@ -79,7 +79,10 @@ export function LiveChart({ live }: { live: LiveResponse }) {
 
   const pending5 = live.forecasts.find((f) => f.hit === null && f.horizon_s === 5);
   const pending15 = live.forecasts.find((f) => f.hit === null && f.horizon_s === 15);
-  const resolved = live.forecasts.filter((f) => f.hit !== null).slice(0, 20);
+  const resolved = [
+    ...live.forecasts.filter((f) => f.hit !== null && f.horizon_s === 5).slice(0, 20),
+    ...live.forecasts.filter((f) => f.hit !== null && f.horizon_s === 15).slice(0, 12),
+  ];
 
   const candleW = vis.length > 1 ? Math.max(1.1, Math.min(4.2, (x(vis[1].t) - x(vis[0].t)) * 0.72)) : 2;
 

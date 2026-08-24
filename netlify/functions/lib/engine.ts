@@ -97,6 +97,14 @@ function emptyBook() {
   };
 }
 
+function featureKlines(klines: { t: number; o: number; h: number; l: number; c: number; v: number; n: number; tb: number }[]) {
+  if (klines.length < 2) return klines;
+  const last = klines[klines.length - 1];
+  // The current second is often ticker-only (v=0). Score the last traded bar.
+  if (last.n === 0 && last.v === 0) return klines.slice(0, -1);
+  return klines;
+}
+
 export async function buildLive(): Promise<LiveResponse> {
   ensureSanity();
   const meta = getMeta();
@@ -111,10 +119,11 @@ export async function buildLive(): Promise<LiveResponse> {
     const close = snap.last || klines[klines.length - 1]?.c || 0;
     const now = snap.now;
 
+    const featBars = featureKlines(klines);
     let signal: Signal;
     let map: Record<string, number> = {};
-    if (klines.length >= 61) {
-      map = computeFeatureMap(klines);
+    if (featBars.length >= 61) {
+      map = computeFeatureMap(featBars);
       const names = meta.features?.length ? meta.features : Object.keys(map);
       const x = vectorFromMap(map, names);
       const pUp = predictPUp(x);
@@ -128,7 +137,7 @@ export async function buildLive(): Promise<LiveResponse> {
     }
 
     let signal15: Signal | null = null;
-    if (is15Enabled() && klines.length >= 61) {
+    if (is15Enabled() && featBars.length >= 61) {
       const meta15 = getMeta15();
       const names15 = meta15.features?.length ? meta15.features : meta.features;
       const x15 = vectorFromMap(map, names15);
