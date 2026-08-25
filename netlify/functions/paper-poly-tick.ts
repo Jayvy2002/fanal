@@ -1,19 +1,18 @@
 import { json } from "./lib/http";
-import { stepPolyPaper } from "./lib/polymarket";
+import { stepMmPaper } from "./lib/polymarket/mmpaper";
 
 /**
- * Cron 1 min : avance le paper Polymarket sans onglet au premier plan.
- * L’intra a besoin du poll UI 1 s. Aucun ordre CLOB réel. Aucune clé.
+ * Cron 1 min : avance le paper MM two-sided. Aucun ordre CLOB. Aucune clé.
  */
 export const handler = async () => {
   try {
-    const snap = await stepPolyPaper();
+    const snap = await stepMmPaper();
     return json(200, {
       ok: true,
-      tick: "paper-poly",
+      tick: "paper-mm",
       n: snap.n,
       cash_usdc: snap.cash_usdc,
-      open: snap.open.length,
+      open: snap.slots.length,
       live_orders: false,
     });
   } catch (err) {

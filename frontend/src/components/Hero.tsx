@@ -28,7 +28,7 @@ export function Hero({ live }: { live: LiveResponse }) {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="text-[11px] font-medium tracking-[0.18em] text-muted">
-            PRÉDICTEUR 1 H / 4 H · {live.symbol} · bougies Coinbase 5 m
+            PRÉDICTEUR 1 H / 4 H · JOUET · ne trade pas · {live.symbol}
           </div>
           <div className="mt-2 flex gap-1">
             {(
@@ -54,8 +54,8 @@ export function Hero({ live }: { live: LiveResponse }) {
           </div>
           <div className="mt-1 text-[12px] text-muted">
             {signal.fire
-              ? `appel |P−0,5| ≥ τ ${nfP.format(signal.tau - 0.5)} · pas un ordre`
-              : "NEUTRE — |P−0,5| trop petit pour un appel"}
+              ? `appel UI |P−0,5| ≥ τ — le paper MM n’écoute pas ça`
+              : "NEUTRE — le paper MM two-sided n’utilise pas ce signal"}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
@@ -85,7 +85,7 @@ export function Hero({ live }: { live: LiveResponse }) {
         <div className="mt-3 rounded-lg border border-gold/30 bg-gold/8 px-3 py-2 text-[12px] leading-relaxed text-gold/90">
           TEST held-out : ce n’est pas un modèle « fort ». La 1 h bat à peine le naive (momentum) ; la 4 h à plat ne
           le bat pas. Brier ≈ 0,25 (pile-ou-face). Les E@10 bp / E@120 bp sont des scénarios de coût Coinbase, pas une
-          promesse de trade. Paper Polymarket éteint.
+          promesse de trade. Ce prédicteur est un jouet UI — il ne déclenche aucun paper.
         </div>
       )}
     </section>

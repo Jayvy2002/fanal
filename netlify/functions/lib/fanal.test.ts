@@ -20,6 +20,14 @@ import {
 import { shouldEnterIntra, shouldExitIntra } from "./polymarket/intra";
 import { projectLock } from "./polymarket/lock";
 import { applyPolyStep, newPolyLedger } from "./polymarket/paper";
+import {
+  applyMmStep,
+  makerBidFills,
+  newMmLedger,
+  planQuotes,
+  takerLockOk,
+  takerPairCostPerShare,
+} from "./polymarket/mm";
 import type { DiscoveredMarket } from "./polymarket/markets";
 import type { PairBook } from "./polymarket/clob";
 
@@ -375,6 +383,83 @@ const mid50: PairBook = {
     preds: { "BTC-USD": { intra: pred, slot: pred } },
   });
   assert(led.open.length === 0 && led.n === 0, "paper éteint — aucun ticket même si fire=true");
+}
+
+/* 12. MM two-sided maker : pas de lookahead, pair < 1 $, redeem $1. */
+{
+  const pair = takerPairCostPerShare(0.4, 0.4);
+  assert(takerLockOk(0.4, 0.4) && pair < 1, `taker lock 40¢+40¢ after fees (${pair})`);
+  assert(!takerLockOk(0.52, 0.52), "taker 52¢+52¢ after fees is not a lock");
+
+  const side = (bid: number, ask: number) => ({
+    bid,
+    ask,
+    mid: (bid + ask) / 2,
+    spread: ask - bid,
+    bids: [] as { price: number; size: number }[],
+    asks: [] as { price: number; size: number }[],
+  });
+  const join: PairBook = { up: side(0.48, 0.49), down: side(0.49, 0.5) };
+  const plan = planQuotes(join, 8, null);
+  assert(plan.why === "maker_pair" && plan.up && plan.down, "join both as maker");
+  assert((plan.up!.bid + plan.down!.bid) <= 1, "maker pair ≤ $1");
+
+  const q = {
+    id: "q",
+    asset: "BTC" as const,
+    slug: "s",
+    slot_start_s: 1,
+    side: "up" as const,
+    bid: 0.48,
+    shares: 10,
+    placed_ts: 1000,
+    placed_ask: 0.49,
+    placed_mid: 0.485,
+    placed_bid: 0.48,
+  };
+  assert(!makerBidFills(q, join.up, 1000), "no fill on placement snapshot");
+  assert(makerBidFills(q, side(0.47, 0.48), 2000), "later ask trade-through fills maker");
+
+  const mkt = market({ remaining_s: 200, slot_start_s: 1_000_000 });
+  const led = newMmLedger(1_000_000_000);
+  applyMmStep(led, {
+    now: 1_000_000_000,
+    markets: [mkt],
+    books: { BTC: join },
+    spots: { BTC: 65000 },
+    rv: { BTC: 0.001 },
+  });
+  assert(led.quotes.length === 2, "posted up+down bids");
+  assert((led.slots[0]?.n_fills ?? 1) === 0, "zero fills on first snapshot");
+
+  const through: PairBook = { up: side(0.47, 0.48), down: side(0.48, 0.49) };
+  applyMmStep(led, {
+    now: 1_000_002_000,
+    markets: [mkt],
+    books: { BTC: through },
+    spots: { BTC: 65000 },
+    rv: { BTC: 0.001 },
+  });
+  const sl = led.slots[0];
+  assert(sl && sl.matched > 0, "both sides filled later → matched pair");
+  assert(sl.paired_cost / sl.matched < 1, "paired cost < $1");
+  assert(led.n_maker_fills >= 2, "maker fills counted");
+  assert(
+    led.quotes.filter((q) => q.asset === "BTC" && q.slot_start_s === mkt.slot_start_s).length === 0,
+    "no leftover quotes once paired",
+  );
+
+  const takerBook: PairBook = { up: side(0.39, 0.4), down: side(0.39, 0.4) };
+  const ledT = newMmLedger(2_000_000_000);
+  applyMmStep(ledT, {
+    now: 2_000_000_000,
+    markets: [market({ remaining_s: 200, slot_start_s: 2_000_000 })],
+    books: { BTC: takerBook },
+    spots: { BTC: 65000 },
+    rv: { BTC: 0.001 },
+  });
+  const st = ledT.slots[0];
+  assert(st && st.n_taker >= 2 && st.matched > 0, "rare taker lock fills both sides same snapshot");
 }
 
 if (failed) {

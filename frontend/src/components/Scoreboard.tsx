@@ -54,9 +54,8 @@ export function Scoreboard({ live }: { live: LiveResponse }) {
         </table>
       </div>
       <div className="mt-2 text-[11px] leading-relaxed text-muted">
-        {h1.test?.beats_naive_flat && h4.test?.beats_naive_flat
-          ? "Les deux têtes battent le naive à plat sur TEST — l’écart reste mince (Brier ≈ 0,25)."
-          : "TEST : la 4 h à plat ne bat pas le naive ; la 1 h le bat de peu. Brier ≈ 0,25 (pile-ou-face). Pas un edge tradable après 10 bp."}
+        TEST : la 4 h à plat ne bat pas le naive ; la 1 h le bat de peu. Brier ≈ 0,25.{" "}
+        <strong className="text-gold/80">Ce scoreboard ne déclenche aucun trade</strong> — le paper est le MM two-sided.
       </div>
     </section>
   );

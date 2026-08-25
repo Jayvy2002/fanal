@@ -5,4 +5,7 @@ export { pollTwap, markStale } from "./twap";
 export { projectLock, expensiveAskOk } from "./lock";
 export { shouldEnterIntra, shouldExitIntra } from "./intra";
 export { applyPolyStep, newPolyLedger, snapshotOf, snapshotPolyPaper, stepPolyPaper } from "./paper";
+export { applyMmStep, newMmLedger, snapshotMm } from "./mm";
+export { stepMmPaper, snapshotMmPaper } from "./mmpaper";
 export type { PolyLedger, PolySnapshot, PolyPosition, PolyTrade, MarketView } from "./types";
+export type { MmLedger, MmSnapshot, MmSlot, MmQuote, MmTrade } from "./mmtypes";

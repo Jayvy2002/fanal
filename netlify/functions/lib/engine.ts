@@ -17,8 +17,10 @@ import {
 } from "./predictor";
 
 export { isPredictSymbol, type PredictSymbol };
-import { snapshotPolyPaper, stepPolyPaper } from "./polymarket";
+import { snapshotPolyPaper } from "./polymarket";
+import { snapshotMmPaper, stepMmPaper } from "./polymarket/mmpaper";
 import type { PolySnapshot } from "./polymarket";
+import type { MmSnapshot } from "./polymarket/mmtypes";
 import type { PredictResponse } from "./predictor/contract";
 
 export type SparkPoint = {
@@ -50,6 +52,7 @@ export type LiveResponse = {
   spark: SparkPoint[];
   predict: { intra: PredictResponse; slot: PredictResponse; h1: PredictResponse; h4: PredictResponse };
   poly: PolySnapshot;
+  mm: MmSnapshot;
   error: string | null;
   bar_s: 300;
   kind: "lgbm";
@@ -57,7 +60,7 @@ export type LiveResponse = {
 };
 
 const HONEST =
-  "Prédicteur 1 h / 4 h sur bougies Coinbase 5 m. Paper Polymarket éteint (aucun ticket). Aucun ordre live.";
+  "Paper MM two-sided Polymarket (maker, pair < 1 $). Le prédicteur 1 h / 4 h est un jouet UI et ne trade pas. Aucun ordre live.";
 
 function emptyBook(): Book {
   return { mid: 0, obi_10: 0, tilt: "neutre", bids: [], asks: [], spread_bps: 0 };
@@ -129,11 +132,12 @@ export async function buildBook(symbol: PredictSymbol = "BTC-USD") {
 export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<LiveResponse> {
   const now = Date.now();
   try {
-    const [ticker, depth, candles, poly, heads] = await Promise.all([
+    const [ticker, depth, candles, mm, poly, heads] = await Promise.all([
       buildTicker(symbol).catch(() => null),
       fetchBook(symbol, 2).catch(() => null),
       fetchCandles5m(symbol),
-      stepPolyPaper().catch(() => snapshotPolyPaper()),
+      stepMmPaper().catch(() => snapshotMmPaper()),
+      snapshotPolyPaper().catch(() => null),
       predictBoth(symbol, undefined, now),
     ]);
     const klines = completedKlines(candlesToKlines(candles), now, 300_000);
@@ -150,7 +154,8 @@ export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<Live
       book,
       spark,
       predict: { intra: heads.h1, slot: heads.h4, h1: heads.h1, h4: heads.h4 },
-      poly,
+      poly: poly ?? ({ open: [], recent: [], markets: [], cash_usdc: 1000 } as PolySnapshot),
+      mm,
       error: heads.h1.error || heads.h4.error,
       bar_s: 300,
       kind: "lgbm",
@@ -159,6 +164,7 @@ export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<Live
   } catch (err) {
     const error = err instanceof Error ? err.message : "live_error";
     const poly = await snapshotPolyPaper().catch(() => null);
+    const mm = await snapshotMmPaper().catch(() => null);
     const heads = await predictBoth(symbol, undefined, now).catch(() => null);
     const h1 = heads?.h1 ?? emptyPred();
     const h4 = heads?.h4 ?? emptyPred();
@@ -171,6 +177,7 @@ export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<Live
       spark: [],
       predict: { intra: h1, slot: h4, h1, h4 },
       poly: poly ?? ({ open: [], recent: [], markets: [], cash_usdc: 1000 } as PolySnapshot),
+      mm: mm ?? ({ on: true, live_orders: false, cash_usdc: 1000, slots: [], quotes: [], recent: [], markets: [] } as MmSnapshot),
       error,
       bar_s: 300,
       kind: "lgbm",
@@ -187,7 +194,7 @@ export async function buildHealth() {
     venue: "coinbase",
     symbols: ["BTC-USD", "ETH-USD"],
     horizons_s: [3600, 14400],
-    paper: "poly_off",
+    paper: "mm_v5",
     live_orders: false,
   };
 }
@@ -229,17 +236,24 @@ export async function handleApi(
     }
     if (p.endsWith("/live")) return { status: 200, body: await buildLive(symbol) };
     if (p.endsWith("/paper-poly-tick") || p.endsWith("/paper-tick")) {
-      const snap = await stepPolyPaper();
+      const snap = await stepMmPaper();
       return {
         status: 200,
-        body: { ok: true, tick: "paper-off", n: snap.n, cash_usdc: snap.cash_usdc, open: snap.open.length, fire: false },
+        body: {
+          ok: true,
+          tick: "paper-mm",
+          n: snap.n,
+          cash_usdc: snap.cash_usdc,
+          open: snap.slots.length,
+          live_orders: false,
+        },
       };
     }
     if (p.endsWith("/paper-poly") || p.endsWith("/paper")) {
       const method = (req?.method || "GET").toUpperCase();
       if (method === "OPTIONS") return { status: 204, body: "" };
-      if (method === "GET") return { status: 200, body: await snapshotPolyPaper() };
-      return { status: 405, body: { error: "methode", hint: "GET snapshot paper Polymarket (éteint, pas d’ordres live)" } };
+      if (method === "GET") return { status: 200, body: await snapshotMmPaper() };
+      return { status: 405, body: { error: "methode", hint: "GET snapshot paper MM (pas d’ordres live)" } };
     }
     return { status: 404, body: { error: "not_found" } };
   } catch (err) {

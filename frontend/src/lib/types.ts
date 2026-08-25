@@ -166,6 +166,89 @@ export type PolySnapshot = {
   lock_90c_math: string;
 };
 
+export type MmSlot = {
+  asset: "BTC" | "ETH";
+  slug: string;
+  slot_start_s: number;
+  shares_up: number;
+  shares_down: number;
+  matched: number;
+  paired_cost: number;
+  n_maker: number;
+  n_taker: number;
+};
+
+export type MmQuote = {
+  side: "up" | "down";
+  bid: number;
+  shares: number;
+};
+
+export type MmTrade = {
+  id: string;
+  ts: number;
+  asset: "BTC" | "ETH";
+  kind: string;
+  matched: number;
+  paired_cost: number;
+  pair_avg: number | null;
+  pnl: number;
+  reason: string;
+};
+
+export type MmTest = {
+  n: number;
+  e_usdc: number | null;
+  e_matched_usdc?: number | null;
+  n_matched?: number;
+  naive_e_usdc: number | null;
+  naive_n: number;
+  coverage: number;
+  mean_pair: number | null;
+  n_taker: number;
+  n_maker: number;
+  lean_skipped: string;
+  note: string;
+};
+
+export type MmMarketView = {
+  market: { asset: "BTC" | "ETH"; slug: string; remaining_s: number };
+  book: { up: SideBook; down: SideBook };
+  p_fair: number | null;
+  p_clob: number | null;
+  quotes: MmQuote[];
+  slot: MmSlot | null;
+  pair_ask: number | null;
+  pair_bid: number | null;
+};
+
+export type MmSnapshot = {
+  on: true;
+  live_orders: false;
+  cash_usdc: number;
+  starting_cash_usdc: number;
+  equity_usdc: number;
+  realized_pnl_usdc: number;
+  unrealized_usdc: number;
+  fees_usdc: number;
+  n: number;
+  n_pairs: number;
+  n_maker_fills: number;
+  n_taker_fills: number;
+  n_scratch: number;
+  hits: number;
+  hit_rate: number | null;
+  clip_usdc: number;
+  quotes: MmQuote[];
+  slots: MmSlot[];
+  recent: MmTrade[];
+  markets: MmMarketView[];
+  store: "blobs" | "file";
+  honest: string;
+  fee_formula: string;
+  test: MmTest;
+};
+
 export type LiveResponse = {
   symbol: "BTC-USD" | "ETH-USD";
   now: number;
@@ -175,6 +258,7 @@ export type LiveResponse = {
   spark: SparkPoint[];
   predict: { intra: PredictResponse; slot: PredictResponse; h1?: PredictResponse; h4?: PredictResponse };
   poly: PolySnapshot;
+  mm?: MmSnapshot;
   error: string | null;
   bar_s: number;
   kind?: "lgbm" | "fairvalue";

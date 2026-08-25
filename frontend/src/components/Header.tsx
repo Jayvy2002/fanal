@@ -33,7 +33,7 @@ export function Header({
         <Shield />
         <div>
           <div className="text-[15px] font-semibold tracking-[0.22em] text-white">FANAL</div>
-          <div className="text-[11px] tracking-wide text-muted">prédicteur 1 h / 4 h · Coinbase 5 m</div>
+          <div className="text-[11px] tracking-wide text-muted">paper MM 5 m · prédicteur 1 h / 4 h (jouet)</div>
         </div>
       </div>
       <div className="flex items-baseline justify-center gap-3">
@@ -62,7 +62,7 @@ export function Header({
             fire ? "border-up/50 text-up" : "border-gold/50 text-gold"
           }`}
         >
-          {fire ? "APPEL" : "NEUTRE"}
+          {fire ? "MM ON" : "MM …"}
         </div>
       </div>
     </header>
