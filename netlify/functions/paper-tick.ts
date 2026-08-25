@@ -1,29 +1,22 @@
 import { json } from "./lib/http";
-import { buildLive } from "./lib/engine";
+import { stepMmPaper } from "./lib/polymarket/mmpaper";
 
 /**
- * Cron Netlify 1 min : avance le paper (flatten / expire) sans onglet au premier plan.
- * Résolution 5s = toujours le poll UI 1s. Sans ce tick, un 24 h paper se fige
- * dès que l’onglet est en arrière-plan (Netlify n’a pas de cron à 1s).
- * Aucun ordre Coinbase réel. Aucune clé.
+ * Cron Netlify 1 min. Avance le paper MM two-sided. Aucun ordre live.
  */
 export const handler = async () => {
   try {
-    const live = await buildLive();
+    const snap = await stepMmPaper();
     return json(200, {
       ok: true,
-      tick: "paper",
-      n: live.paper?.n ?? 0,
-      remaining_s: live.paper?.remaining_s ?? 0,
-      gated: live.signal?.gated ?? false,
-      now: live.now,
+      tick: "paper-mm",
+      n: snap.n,
+      cash_usdc: snap.cash_usdc,
+      open: snap.slots.length,
+      live_orders: false,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "tick_error";
-    return json(500, { ok: false, error: msg });
+    return json(500, { ok: false, error: msg, live_orders: false });
   }
-};
-
-export const config = {
-  schedule: "* * * * *",
 };

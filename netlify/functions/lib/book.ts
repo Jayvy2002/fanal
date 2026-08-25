@@ -1,4 +1,4 @@
-import type { CoinbaseBook } from "./coinbase";
+import type { CoinbaseBook } from "./predictor/coinbase";
 import type { Book, BookLevel } from "./types";
 
 function levels(rows: [string, string, number][], n: number): BookLevel[] {

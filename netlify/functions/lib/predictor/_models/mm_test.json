@@ -1,0 +1,14 @@
+{
+  "n": 217,
+  "e_usdc": -1.8281139170506893,
+  "e_matched_usdc": 0.16000000000000014,
+  "n_matched": 100,
+  "naive_e_usdc": -0.5816843317972351,
+  "naive_n": 217,
+  "coverage": 0.4608294930875576,
+  "mean_pair": 0.9800000000000004,
+  "n_taker": 0,
+  "n_maker": 217,
+  "lean_skipped": "ratio 1,0–1,5× skippé ; live = pair 1:1 maker",
+  "note": "BTC 5 m, 18 h. prices-history last/mid ±1 ¢. E primaire = tous les slots (scratch nues inclus). E apparié seul est un sous-ensemble. Bonereaper sub-seconde ≠ ce régime. Pas une promesse."
+}
