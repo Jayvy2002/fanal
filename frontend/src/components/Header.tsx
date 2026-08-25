@@ -13,13 +13,15 @@ function Shield() {
 
 export function Header({
   ticker,
-  tau,
-  minMoveBps,
+  symbol,
+  onSymbol,
+  fire,
   fallbackPrice,
 }: {
   ticker: TickerResponse | null;
-  tau: number;
-  minMoveBps: number;
+  symbol: "BTC-USD" | "ETH-USD";
+  onSymbol: (s: "BTC-USD" | "ETH-USD") => void;
+  fire: boolean;
   fallbackPrice: number;
 }) {
   const last = ticker?.last || fallbackPrice;
@@ -31,7 +33,7 @@ export function Header({
         <Shield />
         <div>
           <div className="text-[15px] font-semibold tracking-[0.22em] text-white">FANAL</div>
-          <div className="text-[11px] tracking-wide text-muted">prédiction 5s · BTC-USD · Coinbase</div>
+          <div className="text-[11px] tracking-wide text-muted">prédicteur IA · paper Polymarket 5 m</div>
         </div>
       </div>
       <div className="flex items-baseline justify-center gap-3">
@@ -42,12 +44,27 @@ export function Header({
           {ticker ? `${nfPct.format(chg)} %` : ""}
         </div>
       </div>
-      <div className="flex justify-end">
-        <div className="rounded-full border border-gold/50 px-3 py-1 font-mono text-[11px] tracking-wide text-gold">
-          LIGHTGBM · τ {nfPrice.format(tau)} · ≥ {nfPrice.format(minMoveBps)} bp
+      <div className="flex items-center justify-end gap-2">
+        <div className="flex rounded-full border border-line p-0.5 text-[12px]">
+          {(["BTC-USD", "ETH-USD"] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`rounded-full px-3 py-1 ${symbol === s ? "bg-gold/20 text-gold" : "text-muted"}`}
+              onClick={() => onSymbol(s)}
+            >
+              {s.replace("-USD", "")}
+            </button>
+          ))}
+        </div>
+        <div
+          className={`rounded-full border px-3 py-1 font-mono text-[11px] tracking-wide ${
+            fire ? "border-up/50 text-up" : "border-gold/50 text-gold"
+          }`}
+        >
+          {fire ? "FEU" : "SILENCE"}
         </div>
       </div>
     </header>
   );
 }
-

@@ -2,8 +2,8 @@ import { json } from "./lib/http";
 import { stepPolyPaper } from "./lib/polymarket";
 
 /**
- * Cron Netlify 1 min (déclaré uniquement dans netlify.toml).
- * Avance le paper Polymarket. Aucun ordre live.
+ * Cron 1 min : avance le paper Polymarket sans onglet au premier plan.
+ * L’intra a besoin du poll UI 1 s. Aucun ordre CLOB réel. Aucune clé.
  */
 export const handler = async () => {
   try {

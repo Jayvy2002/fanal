@@ -1,19 +1,10 @@
-import {
-  fmtCd,
-  nfBps,
-  nfP,
-  nfPrice,
-  signalColor,
-  type LiveResponse,
-} from "../lib/types";
+import { fmtCd, nfBps, nfP, nfPrice, signalColor, type LiveResponse } from "../lib/types";
 
 export function Hero({ live }: { live: LiveResponse }) {
-  const { signal, paper } = live;
+  const signal = live.predict.intra;
+  const slot = live.predict.slot;
   const color = signalColor(signal.label);
-  const hitRate = paper.hit_rate;
-  const minMove = signal.min_move_bps ?? live.min_move_bps ?? 1;
-  const absMove = Math.abs(signal.expected_move_bps);
-  const blockedMove = signal.gate_block === "move";
+  const mkt = live.poly.markets.find((x) => live.symbol.startsWith(x.market.asset));
   return (
     <section
       className="relative overflow-hidden rounded-xl border bg-card px-5 py-4"
@@ -25,39 +16,35 @@ export function Hero({ live }: { live: LiveResponse }) {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="text-[11px] font-medium tracking-[0.18em] text-muted">
-            PRÉDICTION {signal.horizon_s} SECONDES
+            PRÉDICTEUR · {live.symbol} · intra {signal.horizon_s}s
           </div>
-          <div
-            className="mt-1 font-sans text-4xl font-semibold tracking-wide sm:text-5xl"
-            style={{ color }}
-          >
+          <div className="mt-1 font-sans text-4xl font-semibold tracking-wide sm:text-5xl" style={{ color }}>
             {signal.label}
           </div>
-          {blockedMove && (
-            <div className="mt-1 text-[12px] text-gold/90">
-              |move| prévu {nfBps.format(absMove)} bp sous le seuil {nfPrice.format(minMove)} bp
-            </div>
-          )}
+          <div className="mt-1 text-[12px] text-muted">
+            {signal.fire ? "feu — le bot paper peut entrer en intra" : "silence — le bot intra ne fait rien"}
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
           <Metric label="Confiance" value={`${nfPrice.format(signal.confidence * 100)} %`} />
-          <Metric label="Compte à rebours" value={`${fmtCd(paper.remaining_s)} / 0:05`} />
-          <Metric label="P(↑)" value={nfP.format(signal.p_up)} />
+          <Metric label="P(↑) intra" value={nfP.format(signal.p_up)} />
+          <Metric label="|move| prévu" value={`${nfBps.format(Math.abs(signal.expected_move_bps))} bp`} />
           <Metric
-            label="Paper"
-            value={
-              hitRate === null ? "—" : `${nfPrice.format(hitRate * 100)} % (${paper.n})`
-            }
+            label="Créneau 5 m"
+            value={mkt ? fmtCd(mkt.market.remaining_s) : "—"}
           />
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[12px] text-white/80 tabular">
         <span>
-          cible {nfPrice.format(signal.target_px)}{" "}
+          spot {nfPrice.format(signal.close)}{" "}
           <span className="text-gold">{nfBps.format(signal.expected_move_bps)} bps</span>
         </span>
         <span className="text-muted">
-          feu seulement si |move| ≥ {nfPrice.format(minMove)} bp (après coût 1 bp)
+          slot 5 m : {slot.label} · P(↑) {nfP.format(slot.p_up)} · feu {slot.fire ? "oui" : "non"}
+        </span>
+        <span className="text-muted">
+          τ {nfP.format(signal.tau)} · min |move| {nfPrice.format(signal.min_edge_bps)} bp
         </span>
       </div>
     </section>

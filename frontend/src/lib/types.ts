@@ -1,27 +1,41 @@
 export type Side = "up" | "down" | "flat";
 
-export type Signal = {
-  side: Side;
-  label: "HAUSSIER" | "BAISSIER" | "NEUTRE";
-  p_up: number;
-  confidence: number;
-  gated: boolean;
-  horizon_s: number;
-  why: string;
-  close: number;
-  tau: number;
-  expected_move_bps: number;
-  target_px: number;
-  min_move_bps?: number;
-  gate_block?: "prob" | "move" | null;
-};
-
-export type WhyFeature = {
+export type PredictReason = {
   key: string;
   label: string;
   value: number;
   display: string;
 };
+
+export type PredictResponse = {
+  ts: number;
+  symbol: "BTC-USD" | "ETH-USD";
+  horizon_s: number;
+  p_up: number;
+  expected_move_bps: number;
+  confidence: number;
+  fire: boolean;
+  side: Side;
+  reasons: PredictReason[];
+  label: "HAUSSIER" | "BAISSIER" | "NEUTRE";
+  close: number;
+  bar_ts: number | null;
+  tau: number;
+  min_edge_bps: number;
+  gate_block: "prob" | "move" | "warmup" | "error" | null;
+  venue: "coinbase";
+  test: {
+    gated_acc: number | null;
+    n: number;
+    coverage: number;
+    naive_last_acc: number;
+    mean_abs_move_bps?: number | null;
+    expectancy_1bp?: number | null;
+  };
+  error: string | null;
+};
+
+export type WhyFeature = PredictReason;
 
 export type BookLevel = { p: number; q: number };
 
@@ -43,109 +57,101 @@ export type SparkPoint = {
   side: Side | null;
 };
 
-export type PathPoint = { t: number; p: number };
-
-export type Forecast = {
-  ts: number;
-  side: "up" | "down";
-  label: "HAUSSIER" | "BAISSIER";
+export type ClobLevel = { price: number; size: number };
+export type SideBook = {
+  bid: number;
+  ask: number;
   mid: number;
-  target_px: number;
-  expected_move_bps: number;
-  resolve_ts: number;
-  hit: boolean | null;
-  path: PathPoint[];
-  horizon_s: number;
-  p_up: number;
+  spread: number;
+  bids: ClobLevel[];
+  asks: ClobLevel[];
 };
 
-export type PaperRow = {
-  ts: number;
+export type PolyPosition = {
+  id: string;
+  asset: "BTC" | "ETH";
+  slug: string;
+  strat: "intra" | "lock";
   side: "up" | "down";
-  label: "HAUSSIER" | "BAISSIER";
-  mid: number;
-  mid_end: number | null;
-  hit: boolean | null;
-  signed_bps: number | null;
-  horizon_s: number;
-  pnl_usd?: number;
-  fee_usd?: number;
-  entry_role?: "taker" | "maker";
-  exit_role?: "taker" | "maker" | "cancel";
-  status?: "open" | "pending_entry" | "closed" | "cancelled";
-  id?: string;
+  shares: number;
+  entry_ask: number;
+  entry_ts: number;
+  entry_fee: number;
 };
 
-export type PaperMode = "taker" | "maker";
+export type PolyTrade = {
+  id: string;
+  ts: number;
+  asset: "BTC" | "ETH";
+  strat: "intra" | "lock";
+  side: "up" | "down";
+  shares: number;
+  entry_ask: number;
+  exit_bid: number;
+  entry_fee: number;
+  exit_fee: number;
+  pnl: number;
+  hit: boolean | null;
+  scratch: boolean;
+  reason: string;
+};
 
-export type Paper = {
+export type MarketView = {
+  market: {
+    asset: "BTC" | "ETH";
+    slug: string;
+    remaining_s: number;
+    resolution_source: string;
+    twap_window_s: number;
+    slot_end_s: number;
+  };
+  book: { up: SideBook; down: SideBook };
+  twap: { value: number; stale: boolean; observed_ts: number; window_s: number } | null;
+  strike: { twap: number; late: boolean } | null;
+  p_lock_up: number | null;
+  lock_skip: string | null;
+  predict_intra: PredictResponse;
+  predict_slot: PredictResponse;
+};
+
+export type PolySnapshot = {
+  cash_usdc: number;
+  starting_cash_usdc: number;
+  equity_usdc: number;
+  realized_pnl_usdc: number;
+  unrealized_usdc: number;
+  fees_usdc: number;
   n: number;
+  n_intra: number;
+  n_lock: number;
   hits: number;
   hit_rate: number | null;
-  pending: PaperRow | null;
-  remaining_s: number;
-  recent: PaperRow[];
-  horizon_s: number;
-  mode?: PaperMode;
-  cash_usd?: number;
-  equity_usd?: number;
-  realized_pnl_usd?: number;
-  unrealized_usd?: number;
-  fees_usd?: number;
-  starting_cash_usd?: number;
-  clip_usd?: number;
-  min_move_bps?: number;
-  n_cancelled?: number;
-  fee_tier?: string;
-  taker_fee_bps?: number;
-  maker_fee_bps?: number;
-  round_trip_fee_bps?: number;
-  persisted?: boolean;
-  store?: "blobs" | "file";
-  started_ts?: number;
-  updated_ts?: number;
-  open_position?: {
-    side: "up" | "down";
-    label: "HAUSSIER" | "BAISSIER";
-    qty: number;
-    entry_px: number;
-    role: "taker" | "maker";
-  } | null;
-  honest?: string;
+  n_scratch: number;
+  n_skip_stale: number;
+  n_skip_nofire: number;
+  clip_usdc: number;
+  open: PolyPosition[];
+  recent: PolyTrade[];
+  markets: MarketView[];
+  store: "blobs" | "file";
+  live_orders: false;
+  honest: string;
+  fee_formula: string;
+  lock_90c_math: string;
 };
 
 export type LiveResponse = {
-  signal: Signal;
-  flux: Signal & { ret_5_bps: number | null; rv_60: number | null };
+  symbol: "BTC-USD" | "ETH-USD";
+  now: number;
+  venue: "coinbase";
+  ticker: TickerResponse | null;
   book: Book;
   spark: SparkPoint[];
-  forecasts: Forecast[];
-  why: WhyFeature[];
-  paper: Paper;
+  predict: { intra: PredictResponse; slot: PredictResponse };
+  poly: PolySnapshot;
   error: string | null;
-  kind: string;
-  horizon_s: number;
   bar_s: number;
-  tau: number;
-  min_move_bps?: number;
-  now: number;
-  venue: string;
-  product: string;
-  test: {
-    gated_acc: number | null;
-    n: number;
-    coverage: number;
-    naive_last_acc: number;
-    mean_abs_move_bps?: number | null;
-    expectancy_1bp?: number | null;
-    expectancy_2bp?: number | null;
-  };
-  swapped_live?: boolean | null;
-  coinbase_train?: {
-    n_days?: number;
-    kept_previous_live?: boolean;
-    test?: LiveResponse["test"];
-  };
+  honest: string;
 };
 
 export type TickerResponse = {
@@ -188,11 +194,6 @@ export const nfUsd = new Intl.NumberFormat("fr-FR", {
   maximumFractionDigits: 2,
 });
 
-export const nfQty = new Intl.NumberFormat("fr-FR", {
-  minimumFractionDigits: 6,
-  maximumFractionDigits: 6,
-});
-
 export function fmtClock(ts: number): string {
   return new Date(ts).toLocaleTimeString("fr-FR", {
     hour: "2-digit",
@@ -204,10 +205,12 @@ export function fmtClock(ts: number): string {
 
 export function fmtCd(s: number): string {
   const x = Math.max(0, Math.round(s));
-  return `0:${String(x).padStart(2, "0")}`;
+  const m = Math.floor(x / 60);
+  const r = x % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
 }
 
-export function signalColor(label: Signal["label"]): string {
+export function signalColor(label: PredictResponse["label"]): string {
   if (label === "HAUSSIER") return "#3dd68c";
   if (label === "BAISSIER") return "#f0616d";
   return "#c8a46a";

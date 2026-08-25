@@ -1,11 +1,14 @@
 import { json } from "./lib/http";
-import { buildLive } from "./lib/engine";
+import { buildLive, isPredictSymbol } from "./lib/engine";
 
-export const handler = async () => {
+type Event = { queryStringParameters?: Record<string, string | undefined> };
+
+export const handler = async (event: Event) => {
+  const symbol = event.queryStringParameters?.symbol;
   try {
-    return json(200, await buildLive());
+    return json(200, await buildLive(isPredictSymbol(symbol) ? symbol : "BTC-USD"));
   } catch (err) {
     const msg = err instanceof Error ? err.message : "live_error";
-    return json(500, { error: msg, kind: "lgbm", horizon_s: 5, bar_s: 1 });
+    return json(500, { error: msg, kind: "lgbm", bar_s: 60, live_orders: false });
   }
 };

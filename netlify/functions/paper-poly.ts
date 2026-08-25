@@ -1,10 +1,10 @@
 import { json } from "./lib/http";
-import { handleApi } from "./lib/engine";
+import { snapshotPolyPaper } from "./lib/polymarket";
 
-type Event = { httpMethod?: string; path?: string; body?: string | null };
+type Event = { httpMethod?: string };
 
 export const handler = async (event: Event) => {
-  const method = event.httpMethod || "GET";
+  const method = (event.httpMethod || "GET").toUpperCase();
   if (method === "OPTIONS") {
     return {
       statusCode: 204,
@@ -17,11 +17,11 @@ export const handler = async (event: Event) => {
       body: "",
     };
   }
+  if (method !== "GET") return json(405, { error: "methode", live_orders: false });
   try {
-    const { status, body } = await handleApi("/api/paper-poly", { method, body: event.body ?? undefined });
-    return json(status, body);
+    return json(200, await snapshotPolyPaper());
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "paper_error";
+    const msg = err instanceof Error ? err.message : "paper_poly_error";
     return json(500, { error: msg, live_orders: false });
   }
 };
