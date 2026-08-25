@@ -1,9 +1,9 @@
-import intraJson from "./_models/intra_lgbm.json";
-import intraMetaJson from "./_models/intra_meta.json";
-import slotJson from "./_models/slot_lgbm.json";
-import slotMetaJson from "./_models/slot_meta.json";
+import h1Json from "./_models/h1h_lgbm.json";
+import h1MetaJson from "./_models/h1h_meta.json";
+import h4Json from "./_models/h4h_lgbm.json";
+import h4MetaJson from "./_models/h4h_meta.json";
 import type { PredictHorizon, PredictTest } from "./contract";
-import { HORIZON_INTRA_S, HORIZON_SLOT_S } from "./contract";
+import { HORIZON_1H_S, HORIZON_4H_S } from "./contract";
 
 type Leaf = { v: number };
 type Split = { f: number; t: number; left: number; right: number; missing: number };
@@ -37,12 +37,13 @@ export type ModelMeta = {
   importance?: { name: string; gain: number }[];
   train_archive?: string;
   live_venue?: string;
+  walk_forward?: { fold: number; n: number; flat_acc: number; naive_acc: number; brier: number }[];
 };
 
-const intraModel = intraJson as CompactModel;
-const slotModel = slotJson as CompactModel;
-const intraMeta = intraMetaJson as ModelMeta;
-const slotMeta = slotMetaJson as ModelMeta;
+const h1Model = h1Json as CompactModel;
+const h4Model = h4Json as CompactModel;
+const h1Meta = h1MetaJson as ModelMeta;
+const h4Meta = h4MetaJson as ModelMeta;
 
 function isLeaf(n: Node): n is Leaf {
   return "v" in n;
@@ -75,12 +76,9 @@ export function sigmoid(z: number): number {
   return ez / (1 + ez);
 }
 
-export function getHead(horizon: PredictHorizon): {
-  model: CompactModel;
-  meta: ModelMeta;
-} {
-  if (horizon === HORIZON_SLOT_S) return { model: slotModel, meta: slotMeta };
-  return { model: intraModel, meta: intraMeta };
+export function getHead(horizon: PredictHorizon): { model: CompactModel; meta: ModelMeta } {
+  if (horizon === HORIZON_4H_S) return { model: h4Model, meta: h4Meta };
+  return { model: h1Model, meta: h1Meta };
 }
 
 export function predictPUp(x: number[], horizon: PredictHorizon): number {
@@ -88,7 +86,7 @@ export function predictPUp(x: number[], horizon: PredictHorizon): number {
   return sigmoid(rawScoreOf(model, x));
 }
 
-export function getMeta(horizon: PredictHorizon = HORIZON_INTRA_S): ModelMeta {
+export function getMeta(horizon: PredictHorizon = HORIZON_1H_S): ModelMeta {
   return getHead(horizon).meta;
 }
 
@@ -119,9 +117,9 @@ function binAbs(conf: number, bins: AbsBin[] | undefined, fallback: number): num
 }
 
 export function volProxyBps(map: Record<string, number> | undefined, horizonBars: number): number {
-  const rv5 = map?.rv_5 ?? 0;
-  const rv60 = map?.rv_60 ?? 0;
-  return Math.max(rv5, rv60) * Math.sqrt(Math.max(horizonBars, 1)) * 1e4;
+  const rv12 = map?.rv_12 ?? 0;
+  const rv48 = map?.rv_48 ?? 0;
+  return Math.max(rv12, rv48) * Math.sqrt(Math.max(horizonBars, 1)) * 1e4;
 }
 
 export function expectedAbsMoveBps(
@@ -143,7 +141,7 @@ export function expectedAbsMoveBps(
   lin = Math.max(lin, 0.05);
   const binE = binAbs(conf, c.abs_bins, meanAbs);
   const blended = 0.4 * lin + 0.35 * (Number.isFinite(binE) ? binE : meanAbs) + 0.25 * typical;
-  const cap = horizonBars >= 5 ? 80 : 40;
+  const cap = horizonBars >= 24 ? 1000 : 400;
   if (!Number.isFinite(blended)) return typical;
   return Math.max(0.05, Math.min(cap, blended));
 }
@@ -158,8 +156,25 @@ export function expectedMoveBps(
   return sign * expectedAbsMoveBps(pUp, calib, map, horizonBars);
 }
 
+export function emptyTest(): PredictTest {
+  return {
+    n: 0,
+    coverage: 0,
+    gated_acc: null,
+    naive_last_acc: 0.5,
+    flat_acc: null,
+    mean_abs_move_bps: null,
+    expectancy_10bp: null,
+    expectancy_120bp: null,
+    brier: null,
+    logloss: null,
+    beats_naive_flat: null,
+    beats_naive_gated: null,
+  };
+}
+
 export function verifySanity(eps = 1e-5): void {
-  for (const horizon of [HORIZON_INTRA_S, HORIZON_SLOT_S] as PredictHorizon[]) {
+  for (const horizon of [HORIZON_1H_S, HORIZON_4H_S] as PredictHorizon[]) {
     const { meta } = getHead(horizon);
     for (const s of meta.sanity ?? []) {
       const p = predictPUp(s.x, horizon);

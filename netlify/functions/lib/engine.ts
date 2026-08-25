@@ -4,12 +4,13 @@ import {
   candlesToKlines,
   completedKlines,
   fetchBook,
-  fetchCandles1m,
+  fetchCandles5m,
   fetchStats,
   fetchTicker,
   isPredictSymbol,
   parseTradeTime,
   predict,
+  predictBoth,
   resolveHorizon,
   sparkFrom,
   type PredictSymbol,
@@ -47,16 +48,59 @@ export type LiveResponse = {
   ticker: TickerResponse | null;
   book: Book;
   spark: SparkPoint[];
-  predict: { intra: PredictResponse; slot: PredictResponse };
+  predict: { intra: PredictResponse; slot: PredictResponse; h1: PredictResponse; h4: PredictResponse };
   poly: PolySnapshot;
   error: string | null;
-  bar_s: 60;
-  kind: "fairvalue";
+  bar_s: 300;
+  kind: "lgbm";
   honest: string;
 };
 
+const HONEST =
+  "Prédicteur 1 h / 4 h sur bougies Coinbase 5 m. Paper Polymarket éteint (aucun ticket). Aucun ordre live.";
+
 function emptyBook(): Book {
   return { mid: 0, obi_10: 0, tilt: "neutre", bids: [], asks: [], spread_bps: 0 };
+}
+
+function emptyPred(): PredictResponse {
+  return {
+    ts: Date.now(),
+    symbol: "BTC-USD",
+    horizon_s: 3600,
+    p_up: 0.5,
+    expected_move_bps: 0,
+    expected_abs_move_bps: 0,
+    confidence: 0.5,
+    fire: false,
+    side: "flat",
+    reasons: [],
+    label: "NEUTRE",
+    close: 0,
+    bar_ts: null,
+    tau: 0.54,
+    min_edge_bps: 0,
+    gate_block: "error",
+    venue: "coinbase",
+    bar_s: 300,
+    kind: "lgbm",
+    test: {
+      n: 0,
+      coverage: 0,
+      gated_acc: null,
+      naive_last_acc: 0.5,
+      flat_acc: null,
+      mean_abs_move_bps: null,
+      expectancy_10bp: null,
+      expectancy_120bp: null,
+      brier: null,
+      logloss: null,
+      beats_naive_flat: null,
+      beats_naive_gated: null,
+    },
+    last_hit: null,
+    error: "indisponible",
+  };
 }
 
 export async function buildTicker(symbol: PredictSymbol = "BTC-USD"): Promise<TickerResponse> {
@@ -84,25 +128,20 @@ export async function buildBook(symbol: PredictSymbol = "BTC-USD") {
 
 export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<LiveResponse> {
   const now = Date.now();
-  let error: string | null = null;
   try {
-    const [ticker, depth, candles, poly] = await Promise.all([
+    const [ticker, depth, candles, poly, heads] = await Promise.all([
       buildTicker(symbol).catch(() => null),
       fetchBook(symbol, 2).catch(() => null),
-      fetchCandles1m(symbol),
-      stepPolyPaper(),
+      fetchCandles5m(symbol),
+      stepPolyPaper().catch(() => snapshotPolyPaper()),
+      predictBoth(symbol, undefined, now),
     ]);
-    const klines = candlesToKlines(candles);
-    const spark = sparkFrom(completedKlines(klines, now), 180).map((s) => ({
+    const klines = completedKlines(candlesToKlines(candles), now, 300_000);
+    const spark = sparkFrom(klines, 180).map((s) => ({
       ...s,
       side: null as SparkPoint["side"],
     }));
     const book = depth ? bookFromDepth(depth) : emptyBook();
-    const mkt = poly.markets.find((x) => symbol.startsWith(x.market.asset));
-    const preds = {
-      intra: mkt?.predict_intra ?? (await predict({ symbol, horizon_s: 60 })),
-      slot: mkt?.predict_slot ?? (await predict({ symbol, horizon_s: 300 })),
-    };
     return {
       symbol,
       now,
@@ -110,18 +149,19 @@ export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<Live
       ticker,
       book,
       spark,
-      predict: preds,
+      predict: { intra: heads.h1, slot: heads.h4, h1: heads.h1, h4: heads.h4 },
       poly,
-      error: preds.intra.error || preds.slot.error,
-      bar_s: 60,
-      kind: "fairvalue" as const,
-      honest: poly.honest,
+      error: heads.h1.error || heads.h4.error,
+      bar_s: 300,
+      kind: "lgbm",
+      honest: HONEST,
     };
   } catch (err) {
-    error = err instanceof Error ? err.message : "live_error";
+    const error = err instanceof Error ? err.message : "live_error";
     const poly = await snapshotPolyPaper().catch(() => null);
-    const intra = await predict({ symbol, horizon_s: 60 }).catch(() => null);
-    const slot = await predict({ symbol, horizon_s: 300 }).catch(() => null);
+    const heads = await predictBoth(symbol, undefined, now).catch(() => null);
+    const h1 = heads?.h1 ?? emptyPred();
+    const h4 = heads?.h4 ?? emptyPred();
     return {
       symbol,
       now,
@@ -129,15 +169,12 @@ export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<Live
       ticker: null,
       book: emptyBook(),
       spark: [],
-      predict: {
-        intra: intra ?? ({} as PredictResponse),
-        slot: slot ?? ({} as PredictResponse),
-      },
+      predict: { intra: h1, slot: h4, h1, h4 },
       poly: poly ?? ({ open: [], recent: [], markets: [], cash_usdc: 1000 } as PolySnapshot),
       error,
-      bar_s: 60,
-      kind: "fairvalue",
-      honest: "Paper seulement. Aucun ordre live.",
+      bar_s: 300,
+      kind: "lgbm",
+      honest: HONEST,
     };
   }
 }
@@ -145,12 +182,12 @@ export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<Live
 export async function buildHealth() {
   return {
     ok: true,
-    kind: "fairvalue",
-    bar_s: 60,
+    kind: "lgbm",
+    bar_s: 300,
     venue: "coinbase",
     symbols: ["BTC-USD", "ETH-USD"],
-    horizons_s: [60, 300],
-    paper: "poly_v4",
+    horizons_s: [3600, 14400],
+    paper: "poly_off",
     live_orders: false,
   };
 }
@@ -180,7 +217,7 @@ export async function handleApi(
     if (p.endsWith("/ticker")) return { status: 200, body: await buildTicker(symbol) };
     if (p.endsWith("/book")) return { status: 200, body: await buildBook(symbol) };
     if (p.endsWith("/predict")) {
-      const h = Number(queryParam(raw, "horizon_s") || "60");
+      const h = Number(queryParam(raw, "horizon_s") || "3600");
       const minEdgeRaw = queryParam(raw, "min_edge_bps");
       const min_edge_bps = minEdgeRaw != null ? Number(minEdgeRaw) : undefined;
       const body = await predict({
@@ -195,14 +232,14 @@ export async function handleApi(
       const snap = await stepPolyPaper();
       return {
         status: 200,
-        body: { ok: true, tick: "paper-poly", n: snap.n, cash_usdc: snap.cash_usdc, open: snap.open.length },
+        body: { ok: true, tick: "paper-off", n: snap.n, cash_usdc: snap.cash_usdc, open: snap.open.length, fire: false },
       };
     }
     if (p.endsWith("/paper-poly") || p.endsWith("/paper")) {
       const method = (req?.method || "GET").toUpperCase();
       if (method === "OPTIONS") return { status: 204, body: "" };
       if (method === "GET") return { status: 200, body: await snapshotPolyPaper() };
-      return { status: 405, body: { error: "methode", hint: "GET snapshot paper Polymarket (pas d’ordres live)" } };
+      return { status: 405, body: { error: "methode", hint: "GET snapshot paper Polymarket (éteint, pas d’ordres live)" } };
     }
     return { status: 404, body: { error: "not_found" } };
   } catch (err) {

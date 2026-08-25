@@ -1,7 +1,6 @@
 import type { PredictMarketContext, PredictResponse } from "../predictor/contract";
 import { MIN_EV_USDC } from "../predictor/fairvalue";
-import { getPolyTest, tradeAssetOk } from "../predictor/polytest";
-import { predict } from "../predictor/score";
+import { getPolyTest } from "../predictor/polytest";
 import { fetchPairBook } from "./clob";
 import {
   CRYPTO_TAKER_RATE,
@@ -11,7 +10,7 @@ import {
   lockBreakEvenP,
   redeemPnl,
 } from "./fees";
-import { shouldEnterIntra, shouldExitIntra } from "./intra";
+import { shouldExitIntra } from "./intra";
 import { projectLock } from "./lock";
 import { discoverCurrent, type DiscoveredMarket } from "./markets";
 import { loadLedger, saveLedger, storeKind } from "./store";
@@ -311,8 +310,8 @@ export function applyPolyStep(
     if (book && intra && slot) {
       const pred = mkt.remaining_s > 60 ? intra : slot;
       tryEnter(led, mkt, book, pred, mkt.remaining_s, now);
-    } else if (intra && !intra.fire) {
-      if (noteSkip(led, `nofire:${mkt.asset}:${mkt.slot_start_s}`)) led.n_skip_nofire += 1;
+    } else if (noteSkip(led, `nofire:${mkt.asset}:${mkt.slot_start_s}`)) {
+      led.n_skip_nofire += 1;
     }
 
     views.push({
@@ -342,6 +341,7 @@ function silent(symbol: PredictResponse["symbol"], horizon: number, now: number)
     horizon_s: horizon,
     p_up: 0.5,
     expected_move_bps: 0,
+    expected_abs_move_bps: 0,
     confidence: 0.5,
     fire: false,
     side: "flat",
@@ -349,8 +349,8 @@ function silent(symbol: PredictResponse["symbol"], horizon: number, now: number)
     label: "NEUTRE",
     close: 0,
     bar_ts: null,
-    tau: 0.58,
-    min_edge_bps: 4,
+    tau: 0.54,
+    min_edge_bps: 0,
     min_edge_usdc: MIN_EV_USDC,
     edge_usdc: 0,
     fee_usdc: 0,
@@ -358,11 +358,12 @@ function silent(symbol: PredictResponse["symbol"], horizon: number, now: number)
     p_clob: null,
     strat: null,
     lock_hurdle_90c: lockBreakEvenP(0.9),
-    gate_block: "warmup",
+    gate_block: "prob",
     venue: "coinbase",
-    bar_s: 60,
-    kind: "fairvalue",
+    bar_s: 300,
+    kind: "lgbm",
     test: getPolyTest(symbol),
+    last_hit: null,
     error: null,
   };
 }
@@ -384,6 +385,7 @@ function pWinOf(led: PolyLedger, pos: PolyPosition, remaining: number): number |
   return pos.side === "up" ? proj.p_up : proj.p_down;
 }
 
+/** Paper éteint : aucun ticket, même si le prédicteur 1 h / 4 h dit HAUSSIER. */
 function tryEnter(
   led: PolyLedger,
   mkt: DiscoveredMarket,
@@ -392,19 +394,11 @@ function tryEnter(
   remaining: number,
   now: number,
 ): void {
-  if (hasOpen(led, mkt.asset, mkt.slot_start_s)) return;
-  if (!tradeAssetOk(mkt.asset)) return;
-  if (led.cash_usdc < 5) return;
-  if (remaining < 8) return;
-  const ent = shouldEnterIntra(pred, book);
-  if (!ent.ok) {
-    if (ent.reason === "no_fire" && noteSkip(led, `nofire:${mkt.asset}:${mkt.slot_start_s}`)) {
-      led.n_skip_nofire += 1;
-    }
-    return;
-  }
-  const strat = remaining > 60 ? "intra" : "lock";
-  openTake(led, mkt, ent.side!, ent.ask, strat, now, book);
+  void book;
+  void pred;
+  void remaining;
+  void now;
+  if (noteSkip(led, `off:${mkt.asset}:${mkt.slot_start_s}`)) led.n_skip_nofire += 1;
 }
 
 function openTake(
@@ -476,10 +470,8 @@ export function snapshotOf(led: PolyLedger, views: MarketView[], store: "blobs" 
 
 function honestBlurb(): string {
   return (
-    "Paper seulement — aucun ordre CLOB, aucune clé, aucun retrait. " +
-    "Scoreboard = USDC après frais taker officiels (deux jambes si scalp, une si redeem). " +
-    "Feu = |P(TWAP) − p_CLOB| > fee(p) + pad, hors bande 40–60 ¢. " +
-    "Lock porté jusqu’à $1/$0 (pas de flatten bid). TWAP stale → skip, jamais un mid Coinbase."
+    "Paper Polymarket ÉTEINT — fire forcé false, aucun ticket intra/lock, aucun take CLOB. " +
+    "Conservé dans le code, ce n’est plus le produit. Aucun ordre live, aucune clé, aucun retrait."
   );
 }
 
@@ -538,19 +530,9 @@ export async function stepPolyPaper(): Promise<PolySnapshot> {
     if (tick) captureStrike(led, mkt, tick, now);
   }
   const predMap: Record<string, { intra: PredictResponse; slot: PredictResponse }> = {};
-  await Promise.all(
-    markets.map(async (mkt) => {
-      const ctx = contextOf(
-        mkt,
-        books[mkt.asset],
-        twaps[twapSymbolOf(mkt.asset)],
-        led.strikes[strikeKey(mkt.asset, mkt.slot_start_s)],
-      );
-      const intra = await predict({ symbol: mkt.symbol, horizon_s: 60, now, context: ctx });
-      const slot = await predict({ symbol: mkt.symbol, horizon_s: 300, now, context: ctx });
-      predMap[mkt.symbol] = { intra, slot };
-    }),
-  );
+  for (const mkt of markets) {
+    predMap[mkt.symbol] = { intra: silent(mkt.symbol, 3600, now), slot: silent(mkt.symbol, 14400, now) };
+  }
   const views = applyPolyStep(led, { now, markets, books, twaps, preds: predMap });
   await saveLedger(led, loaded.etag);
   const kind = await storeKind();

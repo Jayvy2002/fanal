@@ -14,9 +14,16 @@ const empty: PredictTest = {
   spread_pad: SPREAD_PAD_DEFAULT,
   gated_acc: null,
   naive_last_acc: 0.5,
+  flat_acc: null,
   mean_abs_move_bps: null,
   expectancy_1bp: null,
   expectancy_2bp: null,
+  expectancy_10bp: null,
+  expectancy_120bp: null,
+  brier: null,
+  logloss: null,
+  beats_naive_flat: null,
+  beats_naive_gated: null,
 };
 
 export type PolyTestFile = {

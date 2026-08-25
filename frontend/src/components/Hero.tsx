@@ -1,10 +1,22 @@
-import { fmtCd, nfBps, nfP, nfPrice, signalColor, type LiveResponse } from "../lib/types";
+import { useState } from "react";
+import {
+  bpsFr,
+  headsOf,
+  nfP,
+  nfPrice,
+  signalColor,
+  type LiveResponse,
+  type PredictHit,
+  type PredictResponse,
+} from "../lib/types";
 
 export function Hero({ live }: { live: LiveResponse }) {
-  const signal = live.predict.intra;
-  const slot = live.predict.slot;
+  const { h1, h4 } = headsOf(live);
+  const [head, setHead] = useState<"1h" | "4h">("1h");
+  const signal = head === "1h" ? h1 : h4;
+  const other = head === "1h" ? h4 : h1;
   const color = signalColor(signal.label);
-  const mkt = live.poly.markets.find((x) => live.symbol.startsWith(x.market.asset));
+  const coinFlip = isCoinFlip(h1) || isCoinFlip(h4);
   return (
     <section
       className="relative overflow-hidden rounded-xl border bg-card px-5 py-4"
@@ -16,48 +28,90 @@ export function Hero({ live }: { live: LiveResponse }) {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="text-[11px] font-medium tracking-[0.18em] text-muted">
-            PRÉDICTEUR · {live.symbol} · intra {signal.horizon_s}s
+            PRÉDICTEUR 1 H / 4 H · {live.symbol} · bougies Coinbase 5 m
           </div>
-          <div className="mt-1 font-sans text-4xl font-semibold tracking-wide sm:text-5xl" style={{ color }}>
+          <div className="mt-2 flex gap-1">
+            {(
+              [
+                ["1h", "1 heure"],
+                ["4h", "4 heures"],
+              ] as const
+            ).map(([k, lab]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setHead(k)}
+                className={`rounded-full border px-3 py-1 text-[12px] ${
+                  head === k ? "border-gold bg-gold/15 text-gold" : "border-line text-muted"
+                }`}
+              >
+                {lab}
+              </button>
+            ))}
+          </div>
+          <div className="mt-2 font-sans text-4xl font-semibold tracking-wide sm:text-5xl" style={{ color }}>
             {signal.label}
           </div>
           <div className="mt-1 text-[12px] text-muted">
-            {signal.fire ? "feu fee-aware — le bot paper peut entrer" : "silence — le bot ne fait rien"}
+            {signal.fire
+              ? `appel |P−0,5| ≥ τ ${nfP.format(signal.tau - 0.5)} · pas un ordre`
+              : "NEUTRE — |P−0,5| trop petit pour un appel"}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
-          <Metric label="P(↑) fair" value={nfP.format(signal.p_fair ?? signal.p_up)} />
+          <Metric label="P(↑) calibrée" value={nfP.format(signal.p_up)} />
+          <Metric label="confiance" value={nfP.format(signal.confidence)} />
           <Metric
-            label="E USDC"
-            value={
-              signal.edge_usdc != null
-                ? `${signal.edge_usdc >= 0 ? "+" : ""}${signal.edge_usdc.toFixed(2).replace(".", ",")} $`
-                : "—"
-            }
+            label="|move| calibré"
+            value={bpsFr(signal.expected_abs_move_bps ?? Math.abs(signal.expected_move_bps))}
           />
-          <Metric
-            label="Créneau 5 m"
-            value={mkt ? fmtCd(mkt.market.remaining_s) : "—"}
-          />
+          <Metric label={`autre tête ${head === "1h" ? "4 h" : "1 h"}`} value={other.label} />
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[12px] text-white/80 tabular">
         <span>
           spot {nfPrice.format(signal.close)}{" "}
-          <span className="text-gold">{nfBps.format(signal.expected_move_bps)} bps</span>
+          <span className="text-gold">{bpsFr(signal.expected_move_bps)} signé</span>
         </span>
         <span className="text-muted">
-          slot 5 m : {slot.label} · P(↑) {nfP.format(slot.p_up)} · feu {slot.fire ? "oui" : "non"}
+          1 h : {h1.label} · P(↑) {nfP.format(h1.p_up)} · {bpsFr(h1.expected_abs_move_bps ?? Math.abs(h1.expected_move_bps))}
         </span>
         <span className="text-muted">
-          p CLOB {signal.p_clob == null ? "—" : nfP.format(signal.p_clob)} · hurdle 90 ¢{" "}
-          {nfP.format(signal.lock_hurdle_90c ?? 0.9063)} ≈ 91 %
+          4 h : {h4.label} · P(↑) {nfP.format(h4.p_up)} · {bpsFr(h4.expected_abs_move_bps ?? Math.abs(h4.expected_move_bps))}
         </span>
-        <span className="text-muted">
-          min E {nfPrice.format(signal.min_edge_usdc ?? 0.5)} USDC · {signal.strat ?? "plat"}
-        </span>
+        <HitLine hit={signal.last_hit ?? null} />
       </div>
+      {coinFlip && (
+        <div className="mt-3 rounded-lg border border-gold/30 bg-gold/8 px-3 py-2 text-[12px] leading-relaxed text-gold/90">
+          TEST held-out : ce n’est pas un modèle « fort ». La 1 h bat à peine le naive (momentum) ; la 4 h à plat ne
+          le bat pas. Brier ≈ 0,25 (pile-ou-face). Les E@10 bp / E@120 bp sont des scénarios de coût Coinbase, pas une
+          promesse de trade. Paper Polymarket éteint.
+        </div>
+      )}
     </section>
+  );
+}
+
+function isCoinFlip(p: PredictResponse): boolean {
+  const t = p.test;
+  if (!t) return true;
+  if (t.beats_naive_flat === false) return true;
+  const acc = t.flat_acc ?? t.gated_acc;
+  if (acc == null) return true;
+  return acc < 0.55;
+}
+
+function HitLine({ hit }: { hit: PredictHit | null }) {
+  if (!hit) return <span className="text-muted">hit/miss : en attente d’un horizon écoulé</span>;
+  if (!hit.resolved) {
+    return <span className="text-muted">hit/miss : horizon {hit.horizon_s / 3600} h pas encore échu</span>;
+  }
+  if (hit.hit == null) return <span className="text-muted">dernier appel : NEUTRE (pas de hit/miss)</span>;
+  return (
+    <span className={hit.hit ? "text-up" : "text-down"}>
+      dernier appel {hit.horizon_s / 3600} h : {hit.hit ? "hit" : "miss"} · {hit.side} @ {nfPrice.format(hit.origin_close)}
+      {hit.future_close != null ? ` → ${nfPrice.format(hit.future_close)}` : ""}
+    </span>
   );
 }
 

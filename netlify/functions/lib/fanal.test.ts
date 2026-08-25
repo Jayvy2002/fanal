@@ -4,9 +4,9 @@
  */
 import { completedKlines } from "./predictor/coinbase";
 import { decisionFromVector } from "./predictor/score";
-import { calibrateP } from "./predictor/scorer";
+import { calibrateP, verifySanity } from "./predictor/scorer";
 import { decideFair, inMidBand, LOCK_90C_HURDLE } from "./predictor/fairvalue";
-import type { PredictResponse } from "./predictor/contract";
+import { HORIZON_1H_S, HORIZON_4H_S, resolveHorizon, type PredictResponse } from "./predictor/contract";
 import { getPolyTest } from "./predictor/polytest";
 import {
   CRYPTO_TAKER_RATE,
@@ -43,6 +43,7 @@ function dummyPred(over: Partial<PredictResponse> = {}): PredictResponse {
     horizon_s: 60,
     p_up: 0.5,
     expected_move_bps: 0,
+    expected_abs_move_bps: 0,
     confidence: 0.5,
     fire: false,
     side: "flat",
@@ -61,9 +62,10 @@ function dummyPred(over: Partial<PredictResponse> = {}): PredictResponse {
     lock_hurdle_90c: LOCK_90C_HURDLE,
     gate_block: "prob",
     venue: "coinbase",
-    bar_s: 60,
-    kind: "fairvalue",
+    bar_s: 300,
+    kind: "lgbm",
     test: getPolyTest("BTC-USD"),
+    last_hit: null,
     error: null,
     ...over,
   };
@@ -223,21 +225,35 @@ const mid50: PairBook = {
   assert(inMidBand(0.5) && !inMidBand(0.25), "mid-band helper");
 }
 
-/* 6. Completed 1m bars — current minute excluded. */
+/* 6. Completed bars — 1 m (compat) et 5 m (cerveau live). */
 {
-  const now = 120_000;
-  const bars = [0, 60_000, 120_000].map((t) => ({ t, o: 1, h: 1, l: 1, c: 1, v: 1 }));
-  const done = completedKlines(bars, now);
-  assert(done.length === 2 && done[1].t === 60_000, "drop incomplete current 1m bar");
+  const now1 = 120_000;
+  const bars1 = [0, 60_000, 120_000].map((t) => ({ t, o: 1, h: 1, l: 1, c: 1, v: 1 }));
+  const done1 = completedKlines(bars1, now1, 60_000);
+  assert(done1.length === 2 && done1[1].t === 60_000, "drop incomplete current 1m bar");
+  const now5 = 600_000;
+  const bars5 = [0, 300_000, 600_000].map((t) => ({ t, o: 1, h: 1, l: 1, c: 1, v: 1 }));
+  const done5 = completedKlines(bars5, now5, 300_000);
+  assert(done5.length === 2 && done5[1].t === 300_000, "drop incomplete current 5m bar");
 }
 
-/* 7. Calibration LightGBM — lecture seulement, pas le feu. */
+/* 7. Calibration LightGBM — lecture seulement, pas de faux 99 %. */
 {
   const hi = calibrateP(0.999, [{ lo: 0.9, hi: 1.01, mean_y: 0.61, n: 100 }]);
   assert(hi < 0.93, `calibrated confidence is not a fake 99% (got ${hi})`);
   const mid = calibrateP(0.5, undefined);
   assert(mid >= 0.05 && mid <= 0.95, "raw p clipped to [0.05, 0.95]");
+  verifySanity();
   void decisionFromVector;
+}
+
+/* 7b. Horizons 1 h / 4 h — 60/300 ne tradent pas, ils mappent vers 1 h. */
+{
+  assert(resolveHorizon(3600) === HORIZON_1H_S, "3600 → 1h");
+  assert(resolveHorizon(14400) === HORIZON_4H_S, "14400 → 4h");
+  assert(resolveHorizon(60) === HORIZON_1H_S, "60 (legacy) maps to 1h, does not trade Poly");
+  assert(resolveHorizon(300) === HORIZON_1H_S, "300 (legacy) maps to 1h, does not trade Poly");
+  assert(resolveHorizon(undefined) === HORIZON_1H_S, "default 1h");
 }
 
 /* 8. Lock EV négatif à 90¢ si P=80 %. */
@@ -335,6 +351,30 @@ const mid50: PairBook = {
   assert(led.recent[0]?.exit_bid === 1, "redeem $1 (TWAP ≥ strike), not CLOB bid");
   assert(led.recent[0]?.exit_fee === 0, "no second taker fee on redeem");
   assert(led.cash_usdc > cashBefore, "cash received $1 * shares");
+}
+
+/* 11. Paper hard-off : fire=true n’ouvre aucun ticket. */
+{
+  const pred = dummyPred({
+    fire: true,
+    side: "down",
+    p_up: 0.15,
+    p_fair: 0.15,
+    confidence: 0.85,
+    edge_usdc: 2.0,
+    label: "BAISSIER",
+    gate_block: null,
+    strat: "intra",
+  });
+  const led = newPolyLedger(1_000_000_000);
+  applyPolyStep(led, {
+    now: 1_000_000_000,
+    markets: [market()],
+    books: { BTC: cheapDown },
+    twaps: {},
+    preds: { "BTC-USD": { intra: pred, slot: pred } },
+  });
+  assert(led.open.length === 0 && led.n === 0, "paper éteint — aucun ticket même si fire=true");
 }
 
 if (failed) {

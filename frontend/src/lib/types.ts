@@ -7,12 +7,42 @@ export type PredictReason = {
   display: string;
 };
 
+export type PredictHit = {
+  horizon_s: number;
+  origin_bar_ts: number;
+  origin_close: number;
+  side: Side;
+  fire: boolean;
+  resolved: boolean;
+  hit: boolean | null;
+  future_close: number | null;
+};
+
+export type PredictTest = {
+  n: number;
+  coverage: number;
+  gated_acc: number | null;
+  naive_last_acc: number;
+  flat_acc: number | null;
+  mean_abs_move_bps: number | null;
+  expectancy_10bp: number | null;
+  expectancy_120bp: number | null;
+  brier: number | null;
+  logloss: number | null;
+  beats_naive_flat: boolean | null;
+  beats_naive_gated: boolean | null;
+  win_rate?: number | null;
+  e_usdc?: number | null;
+  naive_e_usdc?: number | null;
+};
+
 export type PredictResponse = {
   ts: number;
   symbol: "BTC-USD" | "ETH-USD";
   horizon_s: number;
   p_up: number;
   expected_move_bps: number;
+  expected_abs_move_bps?: number;
   confidence: number;
   fire: boolean;
   side: Side;
@@ -22,32 +52,13 @@ export type PredictResponse = {
   bar_ts: number | null;
   tau: number;
   min_edge_bps: number;
-  min_edge_usdc?: number;
-  edge_usdc?: number;
-  fee_usdc?: number;
-  p_fair?: number;
-  p_clob?: number | null;
-  strat?: "intra" | "lock" | null;
-  lock_hurdle_90c?: number;
   gate_block: "prob" | "move" | "warmup" | "error" | "fee" | "midband" | "twap" | "deadzone" | null;
   venue: "coinbase";
-  test: {
-    n: number;
-    coverage: number;
-    win_rate?: number | null;
-    e_usdc?: number | null;
-    naive_n?: number;
-    naive_win_rate?: number | null;
-    naive_e_usdc?: number | null;
-    clip_usdc?: number;
-    spread_pad?: number;
-    gated_acc: number | null;
-    naive_last_acc: number;
-    mean_abs_move_bps?: number | null;
-    expectancy_1bp?: number | null;
-  };
+  bar_s?: 60 | 300;
+  kind?: "lgbm" | "fairvalue";
+  test: PredictTest;
+  last_hit?: PredictHit | null;
   error: string | null;
-  kind?: "fairvalue" | "lgbm";
 };
 
 export type WhyFeature = PredictReason;
@@ -162,10 +173,11 @@ export type LiveResponse = {
   ticker: TickerResponse | null;
   book: Book;
   spark: SparkPoint[];
-  predict: { intra: PredictResponse; slot: PredictResponse };
+  predict: { intra: PredictResponse; slot: PredictResponse; h1?: PredictResponse; h4?: PredictResponse };
   poly: PolySnapshot;
   error: string | null;
   bar_s: number;
+  kind?: "lgbm" | "fairvalue";
   honest: string;
 };
 
@@ -186,8 +198,8 @@ export const nfPrice = new Intl.NumberFormat("fr-FR", {
 });
 
 export const nfPct = new Intl.NumberFormat("fr-FR", {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
   signDisplay: "exceptZero",
 });
 
@@ -197,8 +209,8 @@ export const nfP = new Intl.NumberFormat("fr-FR", {
 });
 
 export const nfBps = new Intl.NumberFormat("fr-FR", {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
   signDisplay: "exceptZero",
 });
 
@@ -229,4 +241,21 @@ export function signalColor(label: PredictResponse["label"]): string {
   if (label === "HAUSSIER") return "#3dd68c";
   if (label === "BAISSIER") return "#f0616d";
   return "#c8a46a";
+}
+
+export function pctFr(x: number | null | undefined, digits = 1): string {
+  if (x == null || !Number.isFinite(x)) return "—";
+  return `${(x * 100).toFixed(digits).replace(".", ",")} %`;
+}
+
+export function bpsFr(x: number | null | undefined): string {
+  if (x == null || !Number.isFinite(x)) return "—";
+  return `${x.toFixed(1).replace(".", ",")} bp`;
+}
+
+export function headsOf(live: LiveResponse): { h1: PredictResponse; h4: PredictResponse } {
+  return {
+    h1: live.predict.h1 ?? live.predict.intra,
+    h4: live.predict.h4 ?? live.predict.slot,
+  };
 }

@@ -5,8 +5,8 @@ export function PolyBook({ live }: { live: LiveResponse }) {
   if (!mkt) {
     return (
       <aside className="rounded-xl border border-line bg-card px-4 py-4">
-        <div className="text-[11px] tracking-[0.16em] text-muted">CLOB POLYMARKET</div>
-        <div className="mt-4 text-sm text-muted">Découverte du marché 5 m en cours…</div>
+        <div className="text-[11px] tracking-[0.16em] text-muted">CLOB POLYMARKET · ÉTEINT</div>
+        <div className="mt-4 text-sm text-muted">Lecture publique seulement — le paper n’envoie aucun ordre.</div>
       </aside>
     );
   }
@@ -14,12 +14,12 @@ export function PolyBook({ live }: { live: LiveResponse }) {
   const down = mkt.book.down;
   return (
     <aside className="rounded-xl border border-line bg-card px-4 py-4">
-      <div className="text-[11px] tracking-[0.16em] text-muted">CLOB · {mkt.market.asset} 5 m</div>
+      <div className="text-[11px] tracking-[0.16em] text-muted">CLOB · {mkt.market.asset} · lecture · OFF</div>
       <div className="mt-2 text-[11px] text-muted truncate">{mkt.market.slug}</div>
       <Side title="Up" book={up} color="#3dd68c" />
       <Side title="Down" book={down} color="#f0616d" />
       <div className="mt-3 text-[10px] leading-relaxed text-muted">
-        TWAP {mkt.twap?.window_s ?? 60}s Chainlink. Lecture publique seulement — pas d’ordre.
+        Carnet public. Paper éteint — pas de take, pas de lock.
       </div>
     </aside>
   );

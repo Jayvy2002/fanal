@@ -91,6 +91,10 @@ export async function fetchCandles1m(product: PredictSymbol): Promise<CoinbaseCa
   return getJson<CoinbaseCandle[]>(`/products/${product}/candles?granularity=60`, 8_000);
 }
 
+export async function fetchCandles5m(product: PredictSymbol): Promise<CoinbaseCandle[]> {
+  return getJson<CoinbaseCandle[]>(`/products/${product}/candles?granularity=300`, 8_000);
+}
+
 export function parseTradeTime(iso: string): number {
   const ms = Date.parse(iso);
   return Number.isFinite(ms) ? ms : Date.now();
@@ -111,11 +115,11 @@ export function candlesToKlines(raw: CoinbaseCandle[]): Kline[] {
   return rows;
 }
 
-/** Barre 1m [t, t+60s) complète seulement si now >= t+60s. */
-export function isBarComplete(t: number, nowMs: number): boolean {
-  return t + 60_000 <= nowMs;
+/** Barre [t, t+barMs) complète seulement si now >= t+barMs. Défaut = 5 m. */
+export function isBarComplete(t: number, nowMs: number, barMs = 300_000): boolean {
+  return t + barMs <= nowMs;
 }
 
-export function completedKlines(klines: Kline[], nowMs: number): Kline[] {
-  return klines.filter((k) => isBarComplete(k.t, nowMs));
+export function completedKlines(klines: Kline[], nowMs: number, barMs = 300_000): Kline[] {
+  return klines.filter((k) => isBarComplete(k.t, nowMs, barMs));
 }
