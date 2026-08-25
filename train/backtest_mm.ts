@@ -9,6 +9,7 @@ import { cryptoTakerFeeUsdc } from "../netlify/functions/lib/polymarket/fees";
 import {
   makerBidFills,
   planQuotes,
+  sharesForBid,
   takerLockOk,
   tickRound,
 } from "../netlify/functions/lib/polymarket/mm";
@@ -157,7 +158,7 @@ function simulateNaive(mkt: Market): Row | null {
   const book = bookAt(pt.p);
   const fav: "up" | "down" = book.up.ask <= book.down.ask ? "up" : "down";
   const ask = fav === "up" ? book.up.ask : book.down.ask;
-  const sh = CLIP / ask;
+  const sh = sharesForBid(ask, CLIP);
   const fee = cryptoTakerFeeUsdc(sh, ask);
   const win = fav === mkt.winner;
   const pnl = (win ? sh : 0) - sh * ask - fee;

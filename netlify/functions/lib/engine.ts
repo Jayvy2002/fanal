@@ -60,7 +60,7 @@ export type LiveResponse = {
 };
 
 const HONEST =
-  "Paper MM two-sided Polymarket (maker, pair < 1 $). Le prédicteur 1 h / 4 h est un jouet UI et ne trade pas. Aucun ordre live.";
+  "Paper MM two-sided Polymarket (maker, pair < 1 $). Jambe nue scratchée, pas une loterie. Le prédicteur 1 h / 4 h est un jouet UI et ne trade pas. Aucun ordre live.";
 
 function emptyBook(): Book {
   return { mid: 0, obi_10: 0, tilt: "neutre", bids: [], asks: [], spread_bps: 0 };

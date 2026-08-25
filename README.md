@@ -8,7 +8,7 @@ Repo : [github.com/Jayvy2002/fanal](https://github.com/Jayvy2002/fanal)
 
 ## Produit
 
-1. **Paper MM two-sided (ON)** — ledger v5, USDC virtuel 1 000, clip ~8 $ / fill. Lit le CLOB public BTC 5 m Up/Down. Poste des **bids virtuels maker** des deux côtés pour un coût pairé cible &lt; 1,00 $ (plafond dur ~1,03 $). Fill seulement sur **trade-through** d’un snapshot *ultérieur* (pas de lookahead). Hold jusqu’à résolution : redeem 1 $ le gagnant, 0 $ le perdant. PnL = `1 × matched − paired_cost − frais taker`.
+1. **Paper MM two-sided (ON)** — ledger v5, USDC virtuel 1 000, clip ~8 $ / fill (max 8 shares, pas de ticket 100× à 1 ¢). Lit le CLOB public BTC 5 m Up/Down. Poste des **bids virtuels maker** des deux côtés pour un coût pairé cible &lt; 1,00 $ (plafond dur ~1,03 $). Fill seulement sur **trade-through** d’un snapshot *ultérieur* (pas de lookahead). Locks appariés : hold jusqu’à résolution, redeem 1 $ le gagnant / 0 $ le perdant. PnL = `1 × matched − paired_cost − frais taker`. Jambe nue : flatten / scratch / write-off — **pas une loterie $1**.
 2. **Prédicteur 1 h / 4 h** — `/api/predict`. LightGBM sur bougies Coinbase 5 m. **Jouet UI.** `fire` n’ouvre aucun ticket. Le MM ne lit pas ce signal.
 3. **Paper directionnel LightGBM** — **éteint.** `tryEnter` est un no-op.
 
@@ -64,12 +64,12 @@ Scoreboard = **E USDC / slot après frais crypto officiels**. Le chiffre négati
 
 | | n | E USDC / slot | notes |
 |---|---|---|---|
-| **Primaire (tous slots, scratch nues inclus)** | 217 | **−3,73** | scoreboard honnête |
-| Appariés seulement | 100 | +0,33 | sous-ensemble ; pair moyen 0,980 |
-| Naive one-sided | 217 | −1,42 | take le favori, hold to res |
+| **Primaire (tous slots, scratch nues inclus)** | 217 | **−1,83** | scoreboard honnête |
+| Appariés seulement | 100 | +0,16 | sous-ensemble ; pair moyen 0,980 |
+| Naive one-sided | 217 | −0,58 | take le favori, hold to res (même plafond 8 shares) |
 | Couverture appariée | 46,1 % | | n_taker = 0 |
 
-Ne pas headline le +0,33. E primaire = **−3,73 $**. Ce n’est **pas** une promesse, et encore moins le net-of-fees d’un taker lourd en production.
+Ne pas headline le +0,16. E primaire = **−1,83 $**. Ce n’est **pas** une promesse, et encore moins le net-of-fees d’un taker lourd en production.
 
 Relancer :
 
@@ -81,8 +81,8 @@ npx tsx train/backtest_mm.ts                        # écrit _models/mm_test.jso
 ## Paper MM (live)
 
 - Univers live : **BTC 5 m** seulement (`MM_ASSETS = ["BTC"]`). ETH / 15 m skippés pour l’instant.
-- Cash virtuel 1 000 USDC. Clip 8 $. Max 8 fills / slot. Timeout nu ~60 s → flatten maker si possible, sinon scratch.
-- Inventaire apparié tenu jusqu’à résolution. Ledger séparé (`fanal-paper-mm`), pas le v4 directionnel.
+- Cash virtuel 1 000 USDC. Clip 8 $ / max 8 shares. Max 8 fills / slot. Timeout nu ~60 s (ou fin de slot) → flatten maker si possible, sinon scratch / write-off.
+- Inventaire apparié tenu jusqu’à résolution. Jambe nue scratchée (pas de loterie $1). Ledger séparé (`fanal-paper-mm`), pas le v4 directionnel.
 - UI : **ON**, coût pairé, inventaire ↑/↓, locks vs nues, cash, réalisé après frais. Label **paper / pas de live**.
 
 ## Prédicteur 1 h / 4 h (jouet — ne trade pas)
@@ -159,4 +159,4 @@ SPA fallback `/* → /index.html` **après** `/api/*`. Cron `paper-tick` = 1 min
 
 ## Honnêteté
 
-Succès = un paper dont le TEST est lisible, pas un jour vert. Ici le TEST MM primaire est **négatif** (−3,73 $ / slot sur 18 h). Le net-of-fees d’un taker lourd plus tard n’est pas une promesse. Le prédicteur 1 h / 4 h reste un pile-ou-face légèrement meilleur que le momentum sur 1 h, et **pire** à plat sur 4 h.
+Succès = un paper dont le TEST est lisible, pas un jour vert. Ici le TEST MM primaire est **négatif** (−1,83 $ / slot sur 18 h). Le net-of-fees d’un taker lourd plus tard n’est pas une promesse. Le prédicteur 1 h / 4 h reste un pile-ou-face légèrement meilleur que le momentum sur 1 h, et **pire** à plat sur 4 h.

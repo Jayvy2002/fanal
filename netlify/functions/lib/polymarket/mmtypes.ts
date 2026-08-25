@@ -16,6 +16,8 @@ export type MmAsset = (typeof MM_ASSETS)[number];
 
 /** Lean extra : 1 = pair 1:1 only. 2 = double the underpriced side. 1.0–1.5x skippé (TEST). */
 export const MM_LEAN_RATIO = 1;
+/** Plafond de shares / fill : payout max = clip USDC si la jambe reste nue. */
+export const MM_MAX_SHARES = MM_CLIP_USDC;
 
 export type MmSide = "up" | "down";
 

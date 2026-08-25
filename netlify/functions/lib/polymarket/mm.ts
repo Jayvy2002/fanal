@@ -13,6 +13,7 @@ import {
   MM_LEDGER_V,
   MM_MAX_FILLS_SLOT,
   MM_MAX_RECENT,
+  MM_MAX_SHARES,
   MM_PAIR_TIMEOUT_MS,
   MM_STARTING_CASH,
   MM_TARGET_PAIR,
@@ -32,8 +33,9 @@ import { getMmTest } from "./mmtest";
 import { twapSymbolOf, type TwapTick } from "./twap";
 
 export const MM_HONEST =
-  "Paper MM two-sided ON — maker (frais 0), pair < 1 $, hold jusqu’à résolution. " +
-  "Pas d’ordres live, aucune clé. Bonereaper est du websocket sub-seconde ; ce paper est plus lent " +
+  "Paper MM two-sided ON — maker (frais 0), pair < 1 $, hold des locks jusqu’à résolution. " +
+  "Jambe nue : flatten / scratch, pas une loterie $1. Pas d’ordres live, aucune clé. " +
+  "Bonereaper est du websocket sub-seconde ; ce paper est plus lent " +
   "(poll 1 s + cron 1 min) donc E attendu = borne basse / autre régime. " +
   "Le prédicteur 1 h / 4 h est un jouet UI et ne trade pas.";
 
@@ -107,6 +109,11 @@ export function takerPairCostPerShare(askUp: number, askDown: number): number {
   return askUp + askDown + fee;
 }
 
+export function sharesForBid(bid: number, clip: number): number {
+  if (!(bid > 0) || !(clip > 0)) return 0;
+  return Math.min(clip / bid, MM_MAX_SHARES);
+}
+
 export function takerLockOk(askUp: number, askDown: number): boolean {
   if (!(askUp > 0) || !(askDown > 0)) return false;
   const c = takerPairCostPerShare(askUp, askDown);
@@ -130,7 +137,7 @@ export function planQuotes(book: PairBook, clip: number, pFair: number | null): 
 
   if (takerLockOk(au, ad)) {
     const pair = takerPairCostPerShare(au, ad);
-    const shares = clip / Math.max(0.08, (au + ad) / 2);
+    const shares = Math.min(sharesForBid(au, clip), sharesForBid(ad, clip));
     const fee = cryptoTakerFeeUsdc(shares, au) + cryptoTakerFeeUsdc(shares, ad);
     const ev = shares * 1 - shares * (au + ad) - fee;
     if (ev > 0 && pair < 1) {
@@ -154,13 +161,15 @@ export function planQuotes(book: PairBook, clip: number, pFair: number | null): 
   bidUp = tickRound(Math.min(bidUp, au - MM_TICK));
   bidDown = tickRound(Math.min(bidDown, ad - MM_TICK));
   if (bidUp < MM_TICK || bidDown < MM_TICK) return { ...empty, why: "no_room" };
+  if (bidUp < 0.05 || bidDown < 0.05) return { ...empty, why: "too_cheap" };
   const sum = bidUp + bidDown;
   if (sum > 1) return { ...empty, why: "pair_over_1" };
   if (sum > MM_HARD_CAP) return { ...empty, why: "cap" };
 
-  const midPx = Math.max(0.08, sum / 2);
-  let shUp = clip / midPx;
-  let shDown = clip / midPx;
+  let sh = Math.min(sharesForBid(bidUp, clip), sharesForBid(bidDown, clip));
+  if (!(sh > 0)) return { ...empty, why: "no_size" };
+  let shUp = sh;
+  let shDown = sh;
   /* Lean extra seulement si ratio demandée ≥ 2 (on skip 1.0–1.5×). */
   const implied = clobPUp(book);
   if (MM_LEAN_RATIO >= 2 && pFair != null && implied != null) {
@@ -375,7 +384,7 @@ function winnerOf(led: MmLedger, slot: MmSlot, now: number): MmSide | null {
   return null;
 }
 
-function redeemSlot(led: MmLedger, slot: MmSlot, now: number, winner: MmSide): void {
+function redeemSlot(led: MmLedger, slot: MmSlot, now: number, winner: MmSide | null): void {
   const matched = slot.matched;
   const pairPnl = matched > 0 ? matched * 1 - slot.paired_cost : 0;
   if (matched > 0) {
@@ -399,40 +408,38 @@ function redeemSlot(led: MmLedger, slot: MmSlot, now: number, winner: MmSide): v
   const nakedDown = slot.shares_down - slot.matched;
   if (nakedUp > 1e-9) {
     const avg = slot.cost_up / Math.max(slot.shares_up, 1e-12);
-    const win = winner === "up";
-    const pnl = (win ? nakedUp : 0) - avg * nakedUp;
-    led.cash_usdc += win ? nakedUp : 0;
+    const pnl = -avg * nakedUp;
+    led.n_scratch += 1;
     pushTrade(led, {
       id: idOf("naked-up", now),
       ts: now,
       asset: slot.asset,
       slug: slot.slug,
-      kind: "naked_redeem",
+      kind: "scratch",
       matched: 0,
       paired_cost: avg * nakedUp,
       pair_avg: null,
       pnl,
-      winner,
-      reason: win ? "naked_up_win" : "naked_up_lose",
+      winner: null,
+      reason: "unpaired_writeoff_up",
     });
   }
   if (nakedDown > 1e-9) {
     const avg = slot.cost_down / Math.max(slot.shares_down, 1e-12);
-    const win = winner === "down";
-    const pnl = (win ? nakedDown : 0) - avg * nakedDown;
-    led.cash_usdc += win ? nakedDown : 0;
+    const pnl = -avg * nakedDown;
+    led.n_scratch += 1;
     pushTrade(led, {
       id: idOf("naked-dn", now),
       ts: now,
       asset: slot.asset,
       slug: slot.slug,
-      kind: "naked_redeem",
+      kind: "scratch",
       matched: 0,
       paired_cost: avg * nakedDown,
       pair_avg: null,
       pnl,
-      winner,
-      reason: win ? "naked_down_win" : "naked_down_lose",
+      winner: null,
+      reason: "unpaired_writeoff_down",
     });
   }
 }
@@ -446,12 +453,11 @@ export function applyMmStep(led: MmLedger, input: MmStepInput): MmMarketView[] {
   const now = input.now;
   const views: MmMarketView[] = [];
 
-  /* Redeem créneaux clos. */
+  /* Redeem créneaux clos : $1 / pair appariée ; nues = write-off (pas une loterie). */
   for (const slot of [...led.slots]) {
     const end = slot.slot_start_s + 300;
     if (now / 1000 < end) continue;
     const w = winnerOf(led, slot, now);
-    if (!w) continue;
     redeemSlot(led, slot, now, w);
     dropSlot(led, slot);
   }
@@ -548,18 +554,32 @@ export function applyMmStep(led: MmLedger, input: MmStepInput): MmMarketView[] {
       );
     }
 
-    /* Naked > 60 s : flatten maker puis scratch taker. */
-    if (slot.naked_since_ts != null && now - slot.naked_since_ts >= MM_PAIR_TIMEOUT_MS) {
-      const nakedSide: MmSide = slot.shares_up > slot.shares_down ? "up" : "down";
-      const sideBook = nakedSide === "up" ? book.up : book.down;
-      const fq = slot.flatten_quote;
-      if (fq && makerAskFills(fq, sideBook, now)) {
-        sellScratch(led, slot, nakedSide, fq.bid, now, false);
-      } else if (!fq && sideBook.ask > 0) {
-        const ask = tickRound(Math.max(sideBook.ask, MM_TICK));
-        slot.flatten_quote = makeQuote(mkt, nakedSide, ask, 0, sideBook, now);
-      } else if (fq && now - fq.placed_ts > 15_000 && sideBook.bid > 0) {
-        sellScratch(led, slot, nakedSide, sideBook.bid, now, true);
+    /* Naked : timeout ~60 s (ou fin de slot) → flatten maker puis scratch. Pas de hold loterie. */
+    const remainingMs = Math.max(0, (mkt.slot_start_s + 300) * 1000 - now);
+    const pairBudget = Math.min(MM_PAIR_TIMEOUT_MS, Math.max(8_000, remainingMs - 8_000));
+    const nakedQty = Math.abs(slot.shares_up - slot.shares_down);
+    if (slot.naked_since_ts != null && nakedQty > 1e-9) {
+      const aged = now - slot.naked_since_ts >= pairBudget;
+      const ending = remainingMs <= 12_000;
+      if (aged || ending) {
+        const nakedSide: MmSide = slot.shares_up > slot.shares_down ? "up" : "down";
+        const sideBook = nakedSide === "up" ? book.up : book.down;
+        const fq = slot.flatten_quote;
+        led.quotes = led.quotes.filter(
+          (q) => !(q.asset === mkt.asset && q.slot_start_s === mkt.slot_start_s),
+        );
+        if (fq && makerAskFills(fq, sideBook, now)) {
+          sellScratch(led, slot, nakedSide, fq.bid, now, false);
+        } else if (ending && sideBook.bid > 0) {
+          sellScratch(led, slot, nakedSide, sideBook.bid, now, true);
+        } else if (!fq && sideBook.ask > 0 && !ending) {
+          const ask = tickRound(Math.max(sideBook.ask, MM_TICK));
+          slot.flatten_quote = makeQuote(mkt, nakedSide, ask, 0, sideBook, now);
+        } else if (fq && now - fq.placed_ts > 8_000 && sideBook.bid > 0) {
+          sellScratch(led, slot, nakedSide, sideBook.bid, now, true);
+        } else if (sideBook.bid > 0 && aged) {
+          sellScratch(led, slot, nakedSide, sideBook.bid, now, true);
+        }
       }
     }
 

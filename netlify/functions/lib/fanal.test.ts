@@ -460,6 +460,40 @@ const mid50: PairBook = {
   });
   const st = ledT.slots[0];
   assert(st && st.n_taker >= 2 && st.matched > 0, "rare taker lock fills both sides same snapshot");
+
+  const mktN = market({ remaining_s: 200, slot_start_s: 3_000_000 });
+  const ledN = newMmLedger(3_000_000_000);
+  applyMmStep(ledN, {
+    now: 3_000_000_000,
+    markets: [mktN],
+    books: { BTC: join },
+    spots: { BTC: 65000 },
+    rv: { BTC: 0.001 },
+  });
+  const onlyUp: PairBook = { up: side(0.47, 0.48), down: side(0.49, 0.5) };
+  applyMmStep(ledN, {
+    now: 3_000_002_000,
+    markets: [mktN],
+    books: { BTC: onlyUp },
+    spots: { BTC: 65000 },
+    rv: { BTC: 0.001 },
+  });
+  const cashAfterFill = ledN.cash_usdc;
+  assert(
+    (ledN.slots[0]?.shares_up ?? 0) > 0 && (ledN.slots[0]?.matched ?? 1) === 0,
+    "one-sided fill before timeout",
+  );
+  applyMmStep(ledN, {
+    now: (3_000_000 + 301) * 1000,
+    markets: [market({ remaining_s: 0, slot_start_s: 3_000_301 })],
+    books: {},
+    spots: { BTC: 65000 },
+    rv: { BTC: 0.001 },
+  });
+  assert(ledN.slots.length === 0, "ended unpaired slot dropped");
+  assert(Math.abs(ledN.cash_usdc - cashAfterFill) < 1e-6, "naked write-off does not pay $1 lottery");
+  assert(ledN.n_scratch >= 1, "unpaired counted as scratch");
+  assert(ledN.realized_pnl_usdc < 0, "write-off loses the USDC spent");
 }
 
 if (failed) {
