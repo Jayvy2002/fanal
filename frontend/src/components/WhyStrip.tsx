@@ -5,7 +5,7 @@ export function WhyStrip({ live }: { live: LiveResponse }) {
   const gate = live.predict.intra.reasons.find((r) => r.key === "gate");
   return (
     <section className="rounded-xl border border-line bg-card px-5 py-3">
-      <div className="text-[11px] tracking-[0.16em] text-muted">POURQUOI · DERNIÈRE BARRE 1 m COMPLÈTE</div>
+      <div className="text-[11px] tracking-[0.16em] text-muted">POURQUOI · TWAP vs CLOB · FEE-AWARE</div>
       <div className="mt-3 flex flex-wrap gap-2">
         {items.length === 0 ? (
           <span className="text-sm text-muted">En attente des features Coinbase…</span>

@@ -7,11 +7,9 @@ import {
   fetchCandles1m,
   fetchStats,
   fetchTicker,
-  getMeta,
   isPredictSymbol,
   parseTradeTime,
   predict,
-  predictBoth,
   resolveHorizon,
   sparkFrom,
   type PredictSymbol,
@@ -53,7 +51,7 @@ export type LiveResponse = {
   poly: PolySnapshot;
   error: string | null;
   bar_s: 60;
-  kind: "lgbm";
+  kind: "fairvalue";
   honest: string;
 };
 
@@ -88,8 +86,7 @@ export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<Live
   const now = Date.now();
   let error: string | null = null;
   try {
-    const [preds, ticker, depth, candles, poly] = await Promise.all([
-      predictBoth(symbol),
+    const [ticker, depth, candles, poly] = await Promise.all([
       buildTicker(symbol).catch(() => null),
       fetchBook(symbol, 2).catch(() => null),
       fetchCandles1m(symbol),
@@ -101,6 +98,11 @@ export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<Live
       side: null as SparkPoint["side"],
     }));
     const book = depth ? bookFromDepth(depth) : emptyBook();
+    const mkt = poly.markets.find((x) => symbol.startsWith(x.market.asset));
+    const preds = {
+      intra: mkt?.predict_intra ?? (await predict({ symbol, horizon_s: 60 })),
+      slot: mkt?.predict_slot ?? (await predict({ symbol, horizon_s: 300 })),
+    };
     return {
       symbol,
       now,
@@ -112,7 +114,7 @@ export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<Live
       poly,
       error: preds.intra.error || preds.slot.error,
       bar_s: 60,
-      kind: "lgbm",
+      kind: "fairvalue" as const,
       honest: poly.honest,
     };
   } catch (err) {
@@ -134,27 +136,21 @@ export async function buildLive(symbol: PredictSymbol = "BTC-USD"): Promise<Live
       poly: poly ?? ({ open: [], recent: [], markets: [], cash_usdc: 1000 } as PolySnapshot),
       error,
       bar_s: 60,
-      kind: "lgbm",
+      kind: "fairvalue",
       honest: "Paper seulement. Aucun ordre live.",
     };
   }
 }
 
 export async function buildHealth() {
-  const intra = getMeta(60);
-  const slot = getMeta(300);
   return {
     ok: true,
-    kind: "lgbm",
+    kind: "fairvalue",
     bar_s: 60,
     venue: "coinbase",
     symbols: ["BTC-USD", "ETH-USD"],
     horizons_s: [60, 300],
-    tau_intra: intra.tau,
-    tau_slot: slot.tau,
-    min_edge_intra: intra.default_min_edge_bps ?? intra.min_move_bps,
-    min_edge_slot: slot.default_min_edge_bps ?? slot.min_move_bps,
-    paper: "poly_v3",
+    paper: "poly_v4",
     live_orders: false,
   };
 }

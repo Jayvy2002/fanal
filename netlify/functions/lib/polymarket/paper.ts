@@ -1,4 +1,6 @@
-import type { PredictResponse } from "../predictor/contract";
+import type { PredictMarketContext, PredictResponse } from "../predictor/contract";
+import { MIN_EV_USDC } from "../predictor/fairvalue";
+import { getPolyTest, tradeAssetOk } from "../predictor/polytest";
 import { predict } from "../predictor/score";
 import { fetchPairBook } from "./clob";
 import {
@@ -7,10 +9,10 @@ import {
   cryptoTakerFeeUsdc,
   intraRoundTripPnl,
   lockBreakEvenP,
-  lockEdgeUsdc,
+  redeemPnl,
 } from "./fees";
 import { shouldEnterIntra, shouldExitIntra } from "./intra";
-import { expensiveAskOk, projectLock } from "./lock";
+import { projectLock } from "./lock";
 import { discoverCurrent, type DiscoveredMarket } from "./markets";
 import { loadLedger, saveLedger, storeKind } from "./store";
 import {
@@ -116,6 +118,14 @@ function markUnrealized(open: PolyPosition[], views: MarketView[]): number {
   for (const pos of open) {
     const v = views.find((x) => x.market.asset === pos.asset);
     if (!v) continue;
+    if (pos.strat === "lock") {
+      const pSide =
+        v.p_lock_up == null ? null : pos.side === "up" ? v.p_lock_up : 1 - v.p_lock_up;
+      if (pSide != null) {
+        u += pos.shares * pSide - pos.shares * pos.entry_ask - pos.entry_fee;
+        continue;
+      }
+    }
     const side = pos.side === "up" ? v.book.up : v.book.down;
     const bid = side.bid;
     if (!(bid > 0)) continue;
@@ -123,6 +133,45 @@ function markUnrealized(open: PolyPosition[], views: MarketView[]): number {
     u += pnl;
   }
   return u;
+}
+
+function pushTrade(
+  led: PolyLedger,
+  pos: PolyPosition,
+  now: number,
+  exitBid: number,
+  entryFee: number,
+  exitFee: number,
+  pnl: number,
+  hit: boolean,
+  scratch: boolean,
+  reason: string,
+): void {
+  led.n += 1;
+  if (pos.strat === "intra") led.n_intra += 1;
+  else led.n_lock += 1;
+  if (hit) led.hits += 1;
+  if (scratch) led.n_scratch += 1;
+  led.realized_pnl_usdc += pnl;
+  const row: PolyTrade = {
+    id: pos.id,
+    ts: now,
+    asset: pos.asset,
+    slug: pos.slug,
+    strat: pos.strat,
+    side: pos.side,
+    shares: pos.shares,
+    entry_ask: pos.entry_ask,
+    exit_bid: exitBid,
+    entry_fee: entryFee,
+    exit_fee: exitFee,
+    pnl,
+    hit,
+    scratch,
+    reason,
+  };
+  led.recent.unshift(row);
+  if (led.recent.length > MAX_RECENT) led.recent.pop();
 }
 
 function closePos(
@@ -136,33 +185,25 @@ function closePos(
   const { pnl, feeIn, feeOut } = intraRoundTripPnl(pos.shares, pos.entry_ask, exitBid);
   const proceeds = pos.shares * exitBid - feeOut;
   led.cash_usdc += proceeds;
-  led.fees_usdc += feeIn + feeOut;
-  led.realized_pnl_usdc += pnl;
-  led.n += 1;
-  if (pos.strat === "intra") led.n_intra += 1;
-  else led.n_lock += 1;
-  const hit = exitBid > pos.entry_ask;
-  if (hit) led.hits += 1;
-  if (scratch) led.n_scratch += 1;
-  const row: PolyTrade = {
-    id: pos.id,
-    ts: now,
-    asset: pos.asset,
-    slug: pos.slug,
-    strat: pos.strat,
-    side: pos.side,
-    shares: pos.shares,
-    entry_ask: pos.entry_ask,
-    exit_bid: exitBid,
-    entry_fee: feeIn,
-    exit_fee: feeOut,
-    pnl,
-    hit,
-    scratch,
-    reason,
-  };
-  led.recent.unshift(row);
-  if (led.recent.length > MAX_RECENT) led.recent.pop();
+  /* feeIn déjà compté à l’ouverture */
+  led.fees_usdc += feeOut;
+  pushTrade(led, pos, now, exitBid, feeIn, feeOut, pnl, exitBid > pos.entry_ask, scratch, reason);
+}
+
+function closeRedeem(led: PolyLedger, pos: PolyPosition, win: boolean, now: number, reason: string): void {
+  const { pnl, feeIn, feeOut, exit } = redeemPnl(pos.shares, pos.entry_ask, win);
+  led.cash_usdc += pos.shares * exit;
+  pushTrade(led, pos, now, exit, feeIn, feeOut, pnl, win, false, reason);
+}
+
+function tryRedeem(led: PolyLedger, pos: PolyPosition, now: number): boolean {
+  if (now / 1000 < pos.slot_start_s + 300) return false;
+  const strike = led.strikes[strikeKey(pos.asset, pos.slot_start_s)];
+  const tick = led.last_twap[twapSymbolOf(pos.asset)];
+  if (!strike || !(strike.twap > 0) || !tick || !(tick.value > 0)) return false;
+  const outcome: "up" | "down" = tick.value >= strike.twap ? "up" : "down";
+  closeRedeem(led, pos, pos.side === outcome, now, "slot_redeem_1_0");
+  return true;
 }
 
 function noteSkip(led: PolyLedger, key: string): boolean {
@@ -193,35 +234,43 @@ export function applyPolyStep(
     if (tick) led.last_twap[sym as keyof TwapMap] = tick;
   }
 
-  /* Sorties d’abord. */
+  /* Sorties d’abord — lock / intra en fin de slot : redeem $1/$0, jamais flatten CLOB. */
   const still: PolyPosition[] = [];
   for (const pos of led.open) {
-    const mkt = input.markets.find((m) => m.asset === pos.asset);
+    const mkt = input.markets.find((m) => m.asset === pos.asset && m.slot_start_s === pos.slot_start_s);
     const book = input.books[pos.asset];
-    if (!mkt || !book) {
+    const remaining = mkt
+      ? mkt.remaining_s
+      : pos.slot_start_s + 300 - now / 1000;
+    if (remaining <= 0 || !mkt) {
+      if (!tryRedeem(led, pos, now)) still.push(pos);
+      continue;
+    }
+    if (!book) {
       still.push(pos);
       continue;
     }
     const sideBook = pos.side === "up" ? book.up : book.down;
     const bid = sideBook.bid;
     const mid = sideBook.mid;
-    const remaining = mkt.remaining_s;
     if (pos.strat === "intra") {
+      const pWin = pWinOf(led, pos, remaining);
       const dec = shouldExitIntra({
         entryAsk: pos.entry_ask,
         mid,
         shares: pos.shares,
         held_s: (now - pos.entry_ts) / 1000,
         remaining_slot_s: remaining,
+        pWin,
+        bid,
       });
-      if (dec.exit && bid > 0) {
-        closePos(led, pos, bid, now, dec.reason, dec.scratch);
+      if (dec.convert_lock) {
+        pos.strat = "lock";
+        still.push(pos);
         continue;
       }
-    } else {
-      /* Lock : on porte jusqu’à la résolution / fin de slot (flatten au bid si le slot est clos). */
-      if (remaining <= 0 && bid > 0) {
-        closePos(led, pos, bid, now, "slot_resolved_mark", false);
+      if (dec.exit && bid > 0) {
+        closePos(led, pos, bid, now, dec.reason, dec.scratch);
         continue;
       }
     }
@@ -259,13 +308,9 @@ export function applyPolyStep(
       lockSkip = "twap_missing";
     }
 
-    if (book && intra) {
-      tryEnter(led, mkt, book, intra, {
-        remaining: mkt.remaining_s,
-        pLockUp,
-        lockSkip,
-        now,
-      });
+    if (book && intra && slot) {
+      const pred = mkt.remaining_s > 60 ? intra : slot;
+      tryEnter(led, mkt, book, pred, mkt.remaining_s, now);
     } else if (intra && !intra.fire) {
       if (noteSkip(led, `nofire:${mkt.asset}:${mkt.slot_start_s}`)) led.n_skip_nofire += 1;
     }
@@ -306,64 +351,60 @@ function silent(symbol: PredictResponse["symbol"], horizon: number, now: number)
     bar_ts: null,
     tau: 0.58,
     min_edge_bps: 4,
+    min_edge_usdc: MIN_EV_USDC,
+    edge_usdc: 0,
+    fee_usdc: 0,
+    p_fair: 0.5,
+    p_clob: null,
+    strat: null,
+    lock_hurdle_90c: lockBreakEvenP(0.9),
     gate_block: "warmup",
     venue: "coinbase",
     bar_s: 60,
-    kind: "lgbm",
-    test: { gated_acc: null, n: 0, coverage: 0, naive_last_acc: 0.5, mean_abs_move_bps: null, expectancy_1bp: null, expectancy_2bp: null },
+    kind: "fairvalue",
+    test: getPolyTest(symbol),
     error: null,
   };
+}
+
+function pWinOf(led: PolyLedger, pos: PolyPosition, remaining: number): number | null {
+  const tick = led.last_twap[twapSymbolOf(pos.asset)];
+  const strike = led.strikes[strikeKey(pos.asset, pos.slot_start_s)];
+  if (!tick || !strike || strike.late) return null;
+  const proj = projectLock({
+    twap: tick.value,
+    strike: strike.twap,
+    remaining_s: remaining,
+    rv_1m: 0.001,
+    twap_stale: tick.stale,
+    has_strike: true,
+    strike_late: false,
+  });
+  if (proj.skip) return null;
+  return pos.side === "up" ? proj.p_up : proj.p_down;
 }
 
 function tryEnter(
   led: PolyLedger,
   mkt: DiscoveredMarket,
   book: Awaited<ReturnType<typeof fetchPairBook>>,
-  intra: PredictResponse,
-  ctx: { remaining: number; pLockUp: number | null; lockSkip: string | null; now: number },
+  pred: PredictResponse,
+  remaining: number,
+  now: number,
 ): void {
   if (hasOpen(led, mkt.asset, mkt.slot_start_s)) return;
+  if (!tradeAssetOk(mkt.asset)) return;
   if (led.cash_usdc < 5) return;
-
-  /* Intra : exige fire. */
-  if (ctx.remaining > 60) {
-    const ent = shouldEnterIntra(intra, book);
-    if (!ent.ok) {
-      if (ent.reason === "no_fire" && noteSkip(led, `nofire:${mkt.asset}:${mkt.slot_start_s}`)) {
-        led.n_skip_nofire += 1;
-      }
-      return;
+  if (remaining < 8) return;
+  const ent = shouldEnterIntra(pred, book);
+  if (!ent.ok) {
+    if (ent.reason === "no_fire" && noteSkip(led, `nofire:${mkt.asset}:${mkt.slot_start_s}`)) {
+      led.n_skip_nofire += 1;
     }
-    openTake(led, mkt, ent.side!, ent.ask, "intra", ctx.now, book);
     return;
   }
-
-  /* Lock : 60 dernières secondes, projecteur mécanique. Pas de last-tick snipe. */
-  if (ctx.remaining > 60 || ctx.remaining < 8) return;
-  if (ctx.lockSkip) {
-    return;
-  }
-  if (ctx.pLockUp == null) return;
-  const pUp = ctx.pLockUp;
-  const pDown = 1 - pUp;
-  const cand: { side: "up" | "down"; ask: number; p: number }[] = [
-    { side: "up", ask: book.up.ask, p: pUp },
-    { side: "down", ask: book.down.ask, p: pDown },
-  ];
-  let best: (typeof cand)[number] | null = null;
-  let bestEv = 0;
-  for (const c of cand) {
-    if (!(c.ask > 0) || c.ask >= 0.99) continue;
-    if (!expensiveAskOk(c.ask, c.p)) continue;
-    const sh = sharesFor(c.ask, led.clip_usdc);
-    const ev = lockEdgeUsdc(sh, c.ask, c.p);
-    if (ev > bestEv) {
-      bestEv = ev;
-      best = c;
-    }
-  }
-  if (!best) return;
-  openTake(led, mkt, best.side, best.ask, "lock", ctx.now, book);
+  const strat = remaining > 60 ? "intra" : "lock";
+  openTake(led, mkt, ent.side!, ent.ask, strat, now, book);
 }
 
 function openTake(
@@ -436,10 +477,30 @@ export function snapshotOf(led: PolyLedger, views: MarketView[], store: "blobs" 
 function honestBlurb(): string {
   return (
     "Paper seulement — aucun ordre CLOB, aucune clé, aucun retrait. " +
-    "Intra n’entre que si /api/predict fire=true ET le CLOB a encore le côté cheap. " +
-    "Le lock skip si le TWAP officiel est stale (pas de mid Coinbase). " +
-    "L’intra ne bat le CLOB que si le prédicteur est en avance sur les cotes."
+    "Scoreboard = USDC après frais taker officiels (deux jambes si scalp, une si redeem). " +
+    "Feu = |P(TWAP) − p_CLOB| > fee(p) + pad, hors bande 40–60 ¢. " +
+    "Lock porté jusqu’à $1/$0 (pas de flatten bid). TWAP stale → skip, jamais un mid Coinbase."
   );
+}
+
+function contextOf(
+  mkt: DiscoveredMarket,
+  book: Awaited<ReturnType<typeof fetchPairBook>> | null | undefined,
+  tick: TwapTick | undefined,
+  strike: StrikeRec | undefined,
+): PredictMarketContext {
+  return {
+    remaining_s: mkt.remaining_s,
+    twap: tick?.value ?? null,
+    twap_stale: tick ? tick.stale : true,
+    strike: strike?.twap ?? null,
+    strike_late: Boolean(strike?.late),
+    has_strike: Boolean(strike && !strike.late && strike.twap > 0),
+    up_ask: book?.up.ask ?? 0,
+    up_bid: book?.up.bid ?? 0,
+    down_ask: book?.down.ask ?? 0,
+    down_bid: book?.down.bid ?? 0,
+  };
 }
 
 export async function stepPolyPaper(): Promise<PolySnapshot> {
@@ -448,7 +509,7 @@ export async function stepPolyPaper(): Promise<PolySnapshot> {
   const led = isCurrentLedger(loaded.ledger) ? loaded.ledger : emptyLedger(now);
   const markets = await discoverCurrent(now);
   const windowS = markets[0] ? twapWindowFromSrc(markets[0].resolution_source) : 60;
-  const [twapsRaw, booksPairs, preds] = await Promise.all([
+  const [twapsRaw, booksPairs] = await Promise.all([
     pollTwap({ windowS, now }),
     Promise.all(
       markets.map(async (m) => {
@@ -459,24 +520,37 @@ export async function stepPolyPaper(): Promise<PolySnapshot> {
         }
       }),
     ),
-    Promise.all(
-      (["BTC-USD", "ETH-USD"] as const).map(async (symbol) => {
-        const intra = await predict({ symbol, horizon_s: 60 });
-        const slot = await predict({ symbol, horizon_s: 300 });
-        return [symbol, { intra, slot }] as const;
-      }),
-    ),
   ]);
   const books: Record<string, NonNullable<(typeof booksPairs)[number][1]>> = {};
   for (const [asset, book] of booksPairs) {
     if (book) books[asset] = book;
   }
-  const predMap: Record<string, { intra: PredictResponse; slot: PredictResponse }> = {};
-  for (const [symbol, p] of preds) predMap[symbol] = p;
   const twaps: TwapMap = {};
   for (const [k, v] of Object.entries(twapsRaw)) {
     if (v) twaps[k as keyof TwapMap] = markStale(v, now);
   }
+  for (const [sym, tick] of Object.entries(twaps)) {
+    if (tick) led.last_twap[sym as keyof TwapMap] = tick;
+  }
+  for (const mkt of markets) {
+    maybePromoteLastTwap(led, mkt);
+    const tick = twaps[twapSymbolOf(mkt.asset)];
+    if (tick) captureStrike(led, mkt, tick, now);
+  }
+  const predMap: Record<string, { intra: PredictResponse; slot: PredictResponse }> = {};
+  await Promise.all(
+    markets.map(async (mkt) => {
+      const ctx = contextOf(
+        mkt,
+        books[mkt.asset],
+        twaps[twapSymbolOf(mkt.asset)],
+        led.strikes[strikeKey(mkt.asset, mkt.slot_start_s)],
+      );
+      const intra = await predict({ symbol: mkt.symbol, horizon_s: 60, now, context: ctx });
+      const slot = await predict({ symbol: mkt.symbol, horizon_s: 300, now, context: ctx });
+      predMap[mkt.symbol] = { intra, slot };
+    }),
+  );
   const views = applyPolyStep(led, { now, markets, books, twaps, preds: predMap });
   await saveLedger(led, loaded.etag);
   const kind = await storeKind();

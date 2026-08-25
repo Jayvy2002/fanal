@@ -22,13 +22,19 @@ export function Hero({ live }: { live: LiveResponse }) {
             {signal.label}
           </div>
           <div className="mt-1 text-[12px] text-muted">
-            {signal.fire ? "feu — le bot paper peut entrer en intra" : "silence — le bot intra ne fait rien"}
+            {signal.fire ? "feu fee-aware — le bot paper peut entrer" : "silence — le bot ne fait rien"}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
-          <Metric label="Confiance" value={`${nfPrice.format(signal.confidence * 100)} %`} />
-          <Metric label="P(↑) intra" value={nfP.format(signal.p_up)} />
-          <Metric label="|move| prévu" value={`${nfBps.format(Math.abs(signal.expected_move_bps))} bp`} />
+          <Metric label="P(↑) fair" value={nfP.format(signal.p_fair ?? signal.p_up)} />
+          <Metric
+            label="E USDC"
+            value={
+              signal.edge_usdc != null
+                ? `${signal.edge_usdc >= 0 ? "+" : ""}${signal.edge_usdc.toFixed(2).replace(".", ",")} $`
+                : "—"
+            }
+          />
           <Metric
             label="Créneau 5 m"
             value={mkt ? fmtCd(mkt.market.remaining_s) : "—"}
@@ -44,7 +50,11 @@ export function Hero({ live }: { live: LiveResponse }) {
           slot 5 m : {slot.label} · P(↑) {nfP.format(slot.p_up)} · feu {slot.fire ? "oui" : "non"}
         </span>
         <span className="text-muted">
-          τ {nfP.format(signal.tau)} · min |move| {nfPrice.format(signal.min_edge_bps)} bp
+          p CLOB {signal.p_clob == null ? "—" : nfP.format(signal.p_clob)} · hurdle 90 ¢{" "}
+          {nfP.format(signal.lock_hurdle_90c ?? 0.9063)} ≈ 91 %
+        </span>
+        <span className="text-muted">
+          min E {nfPrice.format(signal.min_edge_usdc ?? 0.5)} USDC · {signal.strat ?? "plat"}
         </span>
       </div>
     </section>

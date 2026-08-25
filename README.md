@@ -2,8 +2,8 @@
 
 Un seul projet, deux faces :
 
-1. **Prédicteur IA** (le produit) — BTC-USD et ETH-USD, dernières barres 1 minute **complètes** Coinbase Exchange (REST public, aucune clé).
-2. **Bot paper Polymarket** — marchés crypto 5 minutes Up/Down. Il ne « pense » pas tout seul : il **importe** le contrat `/api/predict`. Si `fire=false`, l’intra ne fait **rien**.
+1. **Prédicteur** — fair value TWAP Chainlink (règles live 5 m Up/Down) vs CLOB Polymarket. Feu **fee-aware**.
+2. **Bot paper Polymarket** — n’appelle que `/api/predict`. Si `fire=false`, **aucun** trade.
 
 Ce n’est **pas** l’ancien Fanal 5 secondes, ni un fade 5 minutes. Interface française. Pas un conseil financier.
 
@@ -13,15 +13,17 @@ Repo : [github.com/Jayvy2002/fanal](https://github.com/Jayvy2002/fanal)
 
 ```mermaid
 flowchart LR
-  CB[Coinbase Exchange public REST<br/>ticker / L2 / candles 1m]
+  CB[Coinbase Exchange public REST<br/>vol 1m]
   PRED["predictor/<br/>GET /api/predict"]
   UI[UI française]
   BOT["polymarket/<br/>paper intra + lock"]
   GAMMA[Gamma + CLOB public]
   RTDS[RTDS TWAP Chainlink 60s]
-  LEDGER[Ledger v3 Blobs<br/>fanal-paper-poly]
+  LEDGER[Ledger v4 Blobs<br/>fanal-paper-poly]
 
   CB --> PRED
+  GAMMA --> PRED
+  RTDS --> PRED
   PRED --> UI
   PRED --> BOT
   GAMMA --> BOT
@@ -33,7 +35,7 @@ flowchart LR
 Contrat unique (UI et bot) :
 
 ```
-GET /api/predict?symbol=BTC-USD&horizon_s=60&min_edge_bps=4
+GET /api/predict?symbol=BTC-USD&horizon_s=60
 ```
 
 ```json
@@ -41,51 +43,53 @@ GET /api/predict?symbol=BTC-USD&horizon_s=60&min_edge_bps=4
   "ts": 0,
   "symbol": "BTC-USD",
   "horizon_s": 60,
-  "p_up": 0.61,
-  "expected_move_bps": -8.2,
-  "confidence": 0.61,
+  "p_up": 0.72,
   "fire": true,
   "side": "down",
+  "edge_usdc": 1.12,
+  "p_fair": 0.72,
+  "p_clob": 0.22,
+  "kind": "fairvalue",
   "reasons": []
 }
 ```
 
-- `horizon_s=60` — tête intra (~1 minute).
-- `horizon_s=300` — lecture directionnelle du créneau 5 minutes.
-- `fire` n’est vrai que si la direction sort de la bande τ **et** que |move| prévu ≥ `min_edge_bps` du **consommateur** (défaut conservateur du modèle).
-- `confidence` = probabilité calibrée (bins empiriques VAL), jamais un 99 % inventé.
-- Venue live des features : Coinbase Exchange. **Pas de Binance** dans `/api/*`.
+- `fire` n’est vrai que si `E[USDC] > 0` après `fee = C × 0.07 × p × (1−p)` **et** un pad de spread 1–2 ¢, hors bande 40–60 ¢ (sauf mispricing énorme).
+- LightGBM 1 m Coinbase reste une **lecture** UI, plus le feu.
+- Venue features vol : Coinbase Exchange. **Pas de Binance** dans `/api/*`.
 
-Le bot paper appelle `predict()` du même module (pas un second cerveau).
+Le bot paper appelle `predict()` du même module. Une position par créneau par actif. Clip 25 USDC.
 
-## TEST (split temporel, pas de shuffle)
+## TEST (CLOB 36 h, split temporel, après frais Poly)
 
-60 jours de bougies 1 m Coinbase BTC-USD + ETH-USD (2026-06-26 → 2026-08-25). Naive = signe du dernier rendement 1 m.
+Historique : Gamma + `prices-history` (last/mid + 1 ¢ ask pad) + candles Coinbase 1 m **complètes** (pas de lookahead sur la bougie en cours). Strike/TWAP = **proxy Coinbase 1 m** — ce n’est **pas** le flux officiel Chainlink (RTDS n’a pas d’historique). Redeem $1/$0, un frais taker (deux si scalp). Naive = take le favori au 1er print, hold to res.
 
-| Tête | τ | min \|move\| | Acc gated | n | Couverture | Naive | \|move\| moyen | E après 1 bp | Acc plate |
-|---|---|---|---|---|---|---|---|---|---|
-| **Intra 60 s** | 0,58 | 4 bp | **62,4 %** | 194 | **0,8 %** | 49,1 % | 21,0 bp | **−2,50 bp** | 51,1 % |
-| **Slot 5 m** | 0,54 | 4 bp | **55,2 %** | 397 | **1,5 %** | 49,3 % | 20,6 bp | +2,70 bp | 51,7 % |
+Meilleure config TEST : `default_gap12_ev50` (min gap 12 ¢, min E 0,50 USDC, pad 1,5 ¢). ETH tire E vers le bas → **paper BTC seulement**.
 
-Intra gated-acc > naive, mais l’espérance **après 1 bp est négative**. Ce n’est pas un edge après friction, et encore moins après frais Polymarket + spread CLOB. L’intra **ne peut marcher** que si le modèle est *avant* les cotes ; on n’a pas d’historique CLOB pour backtester « odds already moved ». Le paper skip quand le livre a déjà bougé.
+| Univers | n | Couverture | Win rate | **E USDC après frais** | Naive E USDC | Naive wr |
+|---|---|---|---|---|---|---|
+| **BTC** (config retenue) | 251 | 58,0 % | 26,7 % | **−0,24** | −1,78 | 57,5 % |
+| ETH (écarté) | 229 | 52,9 % | 24,5 % | −6,93 | −0,32 | 61,2 % |
+| BTC+ETH même config | 480 | 55,4 % | 25,6 % | −3,43 | −1,05 | 59,4 % |
+| Naive « take favorite » BTC | 433 | 100 % | 57,5 % | −1,78 | — | — |
 
-Le slot 5 m a une petite couverture gated et une E1 positive **sur le spot** — ce n’est pas un PnL Polymarket.
+**Pas de config TEST avec E[USDC] > 0.** Le chiffre négatif est volontairement conservé.
+
+Pourquoi ça bloque : le CLOB 5 m est déjà informé ; le proxy Coinbase 1 m n’est pas *avant* le livre (et n’est pas le TWAP officiel). Les frais taker `p(1−p)` + 1–2 ¢ de spread mangent le gap restant. Serrer le gate (wings, lock-only, maker rest-bid) empire E. Le naive « acheter le favori » gagne plus souvent (~58 %) mais **perd aussi** après friction. On n’a pas d’historique TWAP Chainlink ni de carnet bid/ask dense.
+
+Ancien LightGBM spot (pour mémoire, **pas** le scoreboard) : intra gated-acc 62,4 % vs naive 49 %, E après 1 bp = −2,50 bp — ce n’était pas du PnL Polymarket.
 
 ## Paper Polymarket (pas de live)
 
-Deux stratégies, BTC et ETH, marchés `btc-updown-5m-*` / `eth-updown-5m-*` (Gamma public).
+**A. Intra.** Fair value TWAP vs CLOB. Take au best ask si `fire=true`. Sortie si le mid couvre **deux** frais + pad, sinon conversion lock dans les 60 dernières secondes (pas de flatten bid). Scratch 40 s si les cotes ne bougent pas **et** que scratch > hold.
 
-**A. Intra-slot odds scalp.** Le prédicteur fire (ex. dump). Le CLOB a encore Down à ~25 ¢. Take virtuel au best ask. Sortie quand le mid a assez bougé pour couvrir les **deux** frais taker + pad, ou scratch (time-stop / fin de slot). Une position par créneau par actif.
-
-**B. Late-window lock.** 60 dernières secondes (pas du last-tick). P(résolution) = projecteur mécanique TWAP officiel vs strike d’ouverture + temps restant + vol récente. Entrée seulement si `P × payout − (1−P) × coût − fee > 0`. Pas d’achat à 90 ¢+ sauf si P ≥ 91 %.
+**B. Lock.** 60 dernières secondes (pas last-tick, deadzone 8 s). Même cerveau. Porté jusqu’à la résolution **$1 / $0** (un seul frais). Pas d’achat à 90 ¢+ sauf P ≥ 91 %.
 
 ### Règles live (août 2026, page marché)
 
-Lu sur un événement live `btc-updown-5m-*` :
-
 > This market will resolve to "Up" if the time-weighted average price (TWAP) of Bitcoin, generated by Chainlink, of the time range specified in the title is greater than or equal to **the price at the beginning of that range**.
 
-Source : `https://data.chain.link/streams/btc-usd-twap-60s-streams` (ETH analogue). Fenêtre **60 s**, pas 30 s. Strike = TWAP à l’open du range. Si le flux RTDS est stale ou si le strike d’open n’a pas été observé : **skip** — on n’invente pas un mid Coinbase.
+Source : `https://data.chain.link/streams/btc-usd-twap-60s-streams` (ETH analogue). Fenêtre **60 s**, pas 30 s. Strike = TWAP à l’open. Flux stale / strike manquant → **skip**, jamais un mid Coinbase.
 
 ### Frais officiels
 
@@ -97,11 +101,9 @@ fee = C × 0.07 × p × (1 − p)   USDC
 
 Makers : 0. Pic à 50 ¢. Arrondi 5 décimales.
 
-**Lock à 90 ¢ :** fee/share = 0,07 × 0,90 × 0,10 = **0,0063 USDC**. Break-even `P > 0,9063 ≈ 91 %` de vrais wins.
+**Lock à 90 ¢ :** fee/share = 0,07 × 0,90 × 0,10 = **0,0063 USDC**. Break-even `P > 0,9063 ≈ 91 %`.
 
-Ledger virtuel **1 000 USDC**, clip 25 USDC, schéma **v3**, store Blobs `fanal-paper-poly` (fichier local en dev). Pas mélangé avec l’ancien paper Coinbase 5 s.
-
-Horloge : poll UI `/api/live` **1 s** (nécessaire pour l’intra) + function planifiée `paper-tick` **1 min**.
+Ledger virtuel **1 000 USDC**, clip 25 USDC, schéma **v4**, store Blobs `fanal-paper-poly`. ETH skip (TEST).
 
 **Aucun ordre CLOB. Aucune clé privée. Aucun wallet USDC. Aucun retrait.**
 
@@ -113,15 +115,15 @@ npm i
 npm run dev
 ```
 
-Vite (`http://localhost:5173`) proxifie `/api/*` vers la même logique que les Netlify Functions.
+Vite (`http://localhost:5173`) proxifie `/api/*`.
 
 ```bash
-# tests (frais, no-fire, exit intra, TWAP stale)
+# tests (frais, skip 50¢, no-fire, redeem $1/$0)
 npx tsx netlify/functions/lib/fanal.test.ts
 
-# ré-entraîner (Python 3 + lightgbm/pandas/numpy) — candles 1 m publiques
-pip install -r train/requirements.txt
-python3 train/train_predictor.py 60
+# backtest E[USDC] (télécharge ~36 h CLOB + Coinbase)
+python3 train/fetch_poly_history.py
+npx tsx train/backtest_poly.ts
 ```
 
 ## Déployer sur Netlify
@@ -141,12 +143,12 @@ SPA fallback `/* → /index.html` **après** `/api/*`.
 ## API
 
 - `GET /api/health`
-- `GET /api/predict?symbol=BTC-USD|ETH-USD&horizon_s=60|300&min_edge_bps=`
-- `GET /api/live?symbol=` — prédicteur + spark 1 m + paper Poly (avance l’horloge)
+- `GET /api/predict?symbol=BTC-USD|ETH-USD&horizon_s=60|300`
+- `GET /api/live?symbol=` — prédicteur + spark 1 m + paper Poly
 - `GET /api/ticker` · `GET /api/book` — Coinbase public
-- `GET /api/paper-poly` — snapshot ledger v3 (sans pas)
+- `GET /api/paper-poly` — snapshot ledger v4 (sans pas)
 - `GET /api/paper-tick` — pas paper (cron 1 min)
 
 ## Honnêteté
 
-Succès = architecture propre + paper honnête, pas un jour vert. L’intra 1 m n’a pas d’espérance positive après 1 bp sur TEST. Le CLOB Polymarket est en général déjà informé. Le lock à 90 ¢ est un hurdle de ~91 %, pas un « presque sûr ».
+Succès = architecture propre + paper honnête, pas un jour vert. TEST après frais taker officiels est **négatif**. Le CLOB est en général déjà informé. Le lock à 90 ¢ est un hurdle de ~91 %, pas un « presque sûr ».

@@ -69,3 +69,16 @@ export function minExitMid(entryAsk: number, shares: number, padUsdc: number): n
   const feeOutCap = cryptoTakerFeeUsdc(c, 0.5);
   return entryAsk + (feeIn + feeOutCap + padUsdc) / c;
 }
+
+/** Résolution $1 / $0 — un seul frais (entrée). Pas de second ticket taker. */
+export function redeemPnl(
+  shares: number,
+  entryAsk: number,
+  win: boolean,
+): { pnl: number; feeIn: number; feeOut: number; exit: number } {
+  const c = Math.abs(shares);
+  const feeIn = cryptoTakerFeeUsdc(c, entryAsk);
+  const exit = win ? 1 : 0;
+  const pnl = c * (exit - entryAsk) - feeIn;
+  return { pnl, feeIn, feeOut: 0, exit };
+}

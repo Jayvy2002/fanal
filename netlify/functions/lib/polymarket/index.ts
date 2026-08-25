@@ -1,4 +1,4 @@
-export { CRYPTO_TAKER_RATE, cryptoTakerFeeUsdc, intraRoundTripPnl, lockBreakEvenP, lockEdgeUsdc, minExitMid } from "./fees";
+export { CRYPTO_TAKER_RATE, cryptoTakerFeeUsdc, intraRoundTripPnl, lockBreakEvenP, lockEdgeUsdc, minExitMid, redeemPnl } from "./fees";
 export { discoverCurrent, discoverMarket, slotBounds } from "./markets";
 export { fetchPairBook } from "./clob";
 export { pollTwap, markStale } from "./twap";

@@ -75,21 +75,16 @@ export default function App() {
         </div>
       </main>
       <footer className="border-t border-line px-5 py-4 text-[11px] leading-relaxed text-muted">
-        Jouet de recherche, pas un conseil financier. Prédicteur = dernière barre 1 minute{" "}
-        <strong>complète</strong> Coinbase Exchange (BTC-USD / ETH-USD). Le bot paper n’appelle que{" "}
-        <code>/api/predict</code>. Aucun ordre Polymarket ni Coinbase. Aucune clé. Aucun retrait. L’intra ne
-        marche que si le modèle est <em>avant</em> le CLOB ; le lock à 90 ¢ exige ~91 % de vrais wins après
-        frais crypto.
-        {test?.gated_acc != null && (
+        Jouet de recherche, pas un conseil financier. Prédicteur = fair value TWAP Chainlink vs CLOB 5 m
+        (Coinbase 1 m seulement pour la vol). Le bot paper n’appelle que <code>/api/predict</code>. Aucun ordre
+        Polymarket ni Coinbase. Aucune clé. Aucun retrait. Bande 40–60 ¢ skippée. Lock à 90 ¢ : hurdle ≈ 91 %.
+        {test?.e_usdc != null && (
           <>
             {" "}
-            TEST intra : {(test.gated_acc * 100).toFixed(1).replace(".", ",")} % gated vs naive{" "}
-            {(test.naive_last_acc * 100).toFixed(1).replace(".", ",")} %, cov{" "}
-            {((test.coverage ?? 0) * 100).toFixed(0)} %
-            {test.expectancy_1bp != null
-              ? `, E après 1 bp ${test.expectancy_1bp.toFixed(2).replace(".", ",")} bp`
-              : ""}
-            .
+            TEST paper (BTC, 36 h, après frais taker) : E {test.e_usdc.toFixed(2).replace(".", ",")} USDC / trade
+            (n={test.n}, cov {((test.coverage ?? 0) * 100).toFixed(0)} %, wr{" "}
+            {test.win_rate != null ? `${(test.win_rate * 100).toFixed(0)} %` : "—"}
+            ) vs naive favorite {test.naive_e_usdc != null ? `${test.naive_e_usdc.toFixed(2).replace(".", ",")} USDC` : "—"}.
           </>
         )}
       </footer>

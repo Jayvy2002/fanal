@@ -3,7 +3,7 @@ import type { PairBook } from "./clob";
 import type { DiscoveredMarket } from "./markets";
 import type { TwapTick } from "./twap";
 
-export const LEDGER_V = 3 as const;
+export const LEDGER_V = 4 as const;
 export const STARTING_CASH = 1000;
 export const CLIP_USDC = 25;
 export const MAX_RECENT = 40;

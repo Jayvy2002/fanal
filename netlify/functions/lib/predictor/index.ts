@@ -11,7 +11,10 @@ export {
   type PredictSymbol,
   type PredictTest,
 } from "./contract";
-export { predict, predictBoth, decisionFromVector } from "./score";
+export { predict, predictBoth, decisionFromVector, decisionFromFair } from "./score";
+export { decideFair, LOCK_90C_HURDLE, MIN_EV_USDC, inMidBand } from "./fairvalue";
+export { getPolyTest, getPolyTestFile, tradeAssetOk } from "./polytest";
+export type { PredictGate, PredictMarketContext } from "./contract";
 export { getMeta, verifySanity, calibrateP, expectedAbsMoveBps } from "./scorer";
 export {
   candlesToKlines,

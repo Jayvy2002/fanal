@@ -46,7 +46,7 @@ export function projectLock(input: LockInput): LockProjection {
   }
   const distBps = ((input.twap - input.strike) / input.strike) * 1e4;
   const t = Math.max(input.remaining_s, 1);
-  const sigma = Math.max(input.rv_1m, 1e-6);
+  const sigma = Math.max(input.rv_1m, 5e-4);
   const vol = sigma * Math.sqrt(t / 60);
   const z = Math.log(input.twap / input.strike) / vol;
   let pUp = normCdf(z);

@@ -22,17 +22,32 @@ export type PredictResponse = {
   bar_ts: number | null;
   tau: number;
   min_edge_bps: number;
-  gate_block: "prob" | "move" | "warmup" | "error" | null;
+  min_edge_usdc?: number;
+  edge_usdc?: number;
+  fee_usdc?: number;
+  p_fair?: number;
+  p_clob?: number | null;
+  strat?: "intra" | "lock" | null;
+  lock_hurdle_90c?: number;
+  gate_block: "prob" | "move" | "warmup" | "error" | "fee" | "midband" | "twap" | "deadzone" | null;
   venue: "coinbase";
   test: {
-    gated_acc: number | null;
     n: number;
     coverage: number;
+    win_rate?: number | null;
+    e_usdc?: number | null;
+    naive_n?: number;
+    naive_win_rate?: number | null;
+    naive_e_usdc?: number | null;
+    clip_usdc?: number;
+    spread_pad?: number;
+    gated_acc: number | null;
     naive_last_acc: number;
     mean_abs_move_bps?: number | null;
     expectancy_1bp?: number | null;
   };
   error: string | null;
+  kind?: "fairvalue" | "lgbm";
 };
 
 export type WhyFeature = PredictReason;

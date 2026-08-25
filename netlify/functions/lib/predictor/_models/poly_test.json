@@ -1,0 +1,149 @@
+{
+  "asof": "2026-08-25",
+  "note": "TWAP/strike = proxy Coinbase 1m (pas l’historique officiel Chainlink). CLOB = prices-history last/mid + 1 ¢ ask pad. Redeem $1/$0, 1 frais taker (2 si scalp). Clip 25 USDC. Une position / slot.",
+  "best_name": "default_gap12_ev50 [BTC only]",
+  "blocked_by": "CLOB déjà informé (proxy Coinbase 1m ≠ TWAP Chainlink live) + frais taker p(1-p) + pad 1–2 ¢. On n’est pas avant le livre ; le naive « take favorite » n’est pas un edge non plus après friction réaliste.",
+  "hours": 36,
+  "n_slots": 433,
+  "trade_assets": [
+    "BTC"
+  ],
+  "combined": {
+    "n": 251,
+    "coverage": 0.5796766743648961,
+    "win_rate": 0.26693227091633465,
+    "e_usdc": -0.24301334954932918,
+    "naive_n": 433,
+    "naive_win_rate": 0.5750577367205543,
+    "naive_e_usdc": -1.7779878984046134,
+    "clip_usdc": 25,
+    "spread_pad": 0.015,
+    "gated_acc": 0.26693227091633465,
+    "naive_last_acc": 0.5750577367205543,
+    "mean_abs_move_bps": null,
+    "expectancy_1bp": null,
+    "expectancy_2bp": null
+  },
+  "by_symbol": {
+    "BTC-USD": {
+      "n": 251,
+      "coverage": 0.5796766743648961,
+      "win_rate": 0.26693227091633465,
+      "e_usdc": -0.24301334954932918,
+      "naive_n": 433,
+      "naive_win_rate": 0.5750577367205543,
+      "naive_e_usdc": -1.7779878984046134,
+      "clip_usdc": 25,
+      "spread_pad": 0.015,
+      "gated_acc": 0.26693227091633465,
+      "naive_last_acc": 0.5750577367205543,
+      "mean_abs_move_bps": null,
+      "expectancy_1bp": null,
+      "expectancy_2bp": null
+    },
+    "ETH-USD": {
+      "n": 229,
+      "coverage": 0.5288683602771362,
+      "win_rate": 0.2445414847161572,
+      "e_usdc": -6.925232627364447,
+      "naive_n": 433,
+      "naive_win_rate": 0.6120092378752887,
+      "naive_e_usdc": -0.3195273114499454,
+      "clip_usdc": 25,
+      "spread_pad": 0.015,
+      "gated_acc": 0.2445414847161572,
+      "naive_last_acc": 0.6120092378752887,
+      "mean_abs_move_bps": null,
+      "expectancy_1bp": null,
+      "expectancy_2bp": null
+    }
+  },
+  "naive": {
+    "n": 433,
+    "coverage": 1,
+    "win_rate": 0.5750577367205543,
+    "e_usdc": -1.7779878984046134,
+    "naive_n": 433,
+    "naive_win_rate": 0.5750577367205543,
+    "naive_e_usdc": -1.7779878984046134,
+    "clip_usdc": 25,
+    "spread_pad": 0.015,
+    "gated_acc": 0.5750577367205543,
+    "naive_last_acc": 0.5750577367205543,
+    "mean_abs_move_bps": null,
+    "expectancy_1bp": null,
+    "expectancy_2bp": null
+  },
+  "configs": [
+    {
+      "name": "default_gap12_ev50",
+      "e_usdc": -3.430988796673625,
+      "n": 480,
+      "win_rate": 0.25625,
+      "coverage": 0.5542725173210161
+    },
+    {
+      "name": "gap15_ev75",
+      "e_usdc": -6.0929231173938,
+      "n": 355,
+      "win_rate": 0.23943661971830985,
+      "coverage": 0.40993071593533487
+    },
+    {
+      "name": "cheap30_gap10",
+      "e_usdc": -7.399064200561206,
+      "n": 400,
+      "win_rate": 0.1425,
+      "coverage": 0.4618937644341801
+    },
+    {
+      "name": "scalp_gap15",
+      "e_usdc": -7.679691708609562,
+      "n": 355,
+      "win_rate": 0.36619718309859156,
+      "coverage": 0.40993071593533487
+    },
+    {
+      "name": "gap20_ev100",
+      "e_usdc": -7.926439888568665,
+      "n": 233,
+      "win_rate": 0.20600858369098712,
+      "coverage": 0.2690531177829099
+    },
+    {
+      "name": "cheap30_gap15",
+      "e_usdc": -9.63247912937664,
+      "n": 270,
+      "win_rate": 0.14814814814814814,
+      "coverage": 0.3117782909930716
+    },
+    {
+      "name": "wings_gap15",
+      "e_usdc": -9.741877884028934,
+      "n": 280,
+      "win_rate": 0.15714285714285714,
+      "coverage": 0.3233256351039261
+    },
+    {
+      "name": "lock_cheap",
+      "e_usdc": -12.261062122161967,
+      "n": 201,
+      "win_rate": 0.04975124378109453,
+      "coverage": 0.23210161662817552
+    },
+    {
+      "name": "lock_gap15",
+      "e_usdc": -13.415722302567515,
+      "n": 176,
+      "win_rate": 0.13636363636363635,
+      "coverage": 0.20323325635103925
+    },
+    {
+      "name": "maker_cheap",
+      "e_usdc": -21.851607786866303,
+      "n": 424,
+      "win_rate": 0.03773584905660377,
+      "coverage": 0.4896073903002309
+    }
+  ]
+}

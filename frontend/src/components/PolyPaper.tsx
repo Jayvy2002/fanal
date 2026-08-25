@@ -41,7 +41,7 @@ export function PolyPaper({ live }: { live: LiveResponse }) {
         <div>
           <div className="text-[11px] tracking-[0.16em] text-muted">PAPER POLYMARKET · 5 m UP/DOWN</div>
           <div className="mt-1 text-[13px] text-white/85">
-            {p.clip_usdc ?? 25}&nbsp;USDC / ticket · intra + lock · départ {nfUsd.format(start)} · ledger v3
+            {p.clip_usdc ?? 25}&nbsp;USDC / ticket · fair value vs CLOB · départ {nfUsd.format(start)} · ledger v4
           </div>
         </div>
         <div className="rounded-full border border-down/40 px-3 py-1 text-[11px] text-down">
@@ -101,11 +101,11 @@ export function PolyPaper({ live }: { live: LiveResponse }) {
       )}
 
       <div className="mt-3 rounded-lg border border-gold/25 bg-gold/5 px-3 py-2 text-[12px] leading-relaxed text-gold/90">
-        Frais crypto taker : <code>{p.fee_formula}</code> USDC (makers 0). {p.lock_90c_math} Intra seulement
-        si le prédicteur fire et que le CLOB a encore le côté cheap — sinon le bot ne fait rien. Le lock skip
-        si le TWAP Chainlink est stale (pas de mid Coinbase). Poll UI 1 s nécessaire pour l’intra ; cron 1 min
-        pour le flatten. Carnet persisté ({p.store === "blobs" ? "Netlify Blobs" : "fichier local"}), schéma v3
-        (pas mélangé avec l’ancien paper Coinbase 5 s).
+        Frais crypto taker : <code>{p.fee_formula}</code> USDC (makers 0). {p.lock_90c_math} Scoreboard = PnL
+        USDC après frais (deux jambes si scalp, une si redeem $1/$0). Feu seulement si |P(TWAP) − p_CLOB| &gt;
+        fee(p) + pad, hors bande 40–60 ¢. ETH paper skip si TEST le tire vers le bas. TWAP stale → skip (pas de
+        mid Coinbase). Poll UI 1 s ; cron 1 min. Carnet persisté ({p.store === "blobs" ? "Netlify Blobs" : "fichier local"}),
+        schéma v4. Aucun ordre live.
       </div>
 
       <div className="mt-3 overflow-x-auto">
