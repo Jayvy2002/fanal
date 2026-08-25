@@ -165,6 +165,13 @@ function closePos(
   if (led.recent.length > MAX_RECENT) led.recent.pop();
 }
 
+function noteSkip(led: PolyLedger, key: string): boolean {
+  led.noted_skips = led.noted_skips ?? {};
+  if (led.noted_skips[key]) return false;
+  led.noted_skips[key] = true;
+  return true;
+}
+
 function hasOpen(led: PolyLedger, asset: string, slot: number): boolean {
   return led.open.some((p) => p.asset === asset && p.slot_start_s === slot);
 }
@@ -246,7 +253,7 @@ export function applyPolyStep(
       pLockUp = proj.p_up;
       lockSkip = proj.skip ? proj.skip_reason : null;
       if (proj.skip && proj.skip_reason === "twap_stale" && mkt.remaining_s <= 60) {
-        led.n_skip_stale += 1;
+        if (noteSkip(led, `stale:${mkt.asset}:${mkt.slot_start_s}`)) led.n_skip_stale += 1;
       }
     } else {
       lockSkip = "twap_missing";
@@ -260,7 +267,7 @@ export function applyPolyStep(
         now,
       });
     } else if (intra && !intra.fire) {
-      led.n_skip_nofire += 1;
+      if (noteSkip(led, `nofire:${mkt.asset}:${mkt.slot_start_s}`)) led.n_skip_nofire += 1;
     }
 
     views.push({
@@ -322,7 +329,9 @@ function tryEnter(
   if (ctx.remaining > 60) {
     const ent = shouldEnterIntra(intra, book);
     if (!ent.ok) {
-      if (ent.reason === "no_fire") led.n_skip_nofire += 1;
+      if (ent.reason === "no_fire" && noteSkip(led, `nofire:${mkt.asset}:${mkt.slot_start_s}`)) {
+        led.n_skip_nofire += 1;
+      }
       return;
     }
     openTake(led, mkt, ent.side!, ent.ask, "intra", ctx.now, book);

@@ -71,6 +71,8 @@ export type PolyLedger = {
   recent: PolyTrade[];
   strikes: Record<string, StrikeRec>;
   last_twap: Partial<Record<"btc/usd" | "eth/usd", TwapTick>>;
+  /** Une entrée par créneau : ne pas compter chaque poll 1 s. */
+  noted_skips?: Record<string, true>;
 };
 
 export type MarketView = {
